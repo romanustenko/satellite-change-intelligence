@@ -1,0 +1,92 @@
+[build-system]
+requires = ["setuptools>=75", "wheel"]
+build-backend = "setuptools.build_meta"
+
+
+[project]
+name = "satchange"
+version = "0.1.0"
+description = "Satellite image change detection with uncertainty estimation."
+readme = "README.md"
+requires-python = ">=3.11,<3.13"
+
+dependencies = [
+    "torch",
+    "torchvision",
+
+    "numpy>=1.26",
+    "pillow>=10.0",
+    "opencv-python>=4.10",
+    "albumentations>=2.0",
+    "gdown>=6.0",
+
+    "pandas>=2.2",
+    "matplotlib>=3.9",
+    "scikit-learn>=1.5",
+    "torchmetrics>=1.4",
+
+    "timm>=1.0",
+    "einops>=0.8",
+
+    "pydantic>=2.8",
+    "PyYAML>=6.0",
+    "tqdm>=4.66",
+    "rich>=13.7"
+]
+
+
+[project.optional-dependencies]
+notebooks = [
+    "jupyterlab>=4.2",
+    "ipykernel>=6.29"
+]
+
+api = [
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.30",
+    "python-multipart>=0.0.9"
+]
+
+geo = [
+    "rasterio>=1.4",
+    "shapely>=2.0"
+]
+
+dev = [
+    "pytest>=8.3",
+    "pytest-cov>=5.0",
+    "ruff>=0.7",
+    "mypy>=1.13",
+    "pre-commit>=4.0"
+]
+
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-ra -q"
+
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+
+[tool.ruff.lint]
+select = [
+    "E",
+    "F",
+    "I",
+    "B",
+    "UP"
+]
+
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+disallow_untyped_defs = true

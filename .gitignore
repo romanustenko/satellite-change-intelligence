@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Environments
+.venv/
+venv/
+
+# IDE
+.vscode/
+.idea/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Environment variables
+.env
+
+# Datasets
+data/*
+!data/.gitkeep
+
+# Generated artifacts
+artifacts/checkpoints/*
+artifacts/predictions/*
+artifacts/logs/*
+
+# Models
+*.pt
+*.pth
+*.ckpt
+*.onnx
+
+# NumPy and temporary data
+*.npy
+*.npz
+*.tmp
+
+# OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,13 @@
+﻿model:
+  name: bit
+  in_channels: 3
+  out_channels: 1
+  backbone: resnet18
+
+training:
+  image_size: 256
+  batch_size: 1
+  epochs: 100
+  learning_rate: 0.0001
+  mixed_precision: true
+  gradient_accumulation_steps: 4
