@@ -1,0 +1,43 @@
+﻿project:
+  name: satellite-change-intelligence
+  seed: 42
+
+runtime:
+  device: auto
+  mixed_precision: true
+
+model:
+  name: fc_siam_diff
+  parameters:
+    in_channels: 3
+    out_channels: 1
+    base_channels: [16, 32]
+
+data:
+  image_size: None
+  batch_size: 2
+  num_workers: 0
+
+training:
+  epochs: 100
+  learning_rate: 0.001
+  weight_decay: 0.0001
+
+  loss:
+    bce_weight: 0.5
+    dice_weight: 0.5
+
+  threshold: 0.5
+
+output:
+  directory: artifacts/fc_siam_diff
+  checkpoint_name: best.pt
+
+
+dataset:
+  name: levir_cd
+
+  download_url: "https://drive.google.com/drive/folders/1dLuzldMRmbBNKPpUkX8Z53hi6NHLrWim"
+
+  download_directory: data/downloads/levir_cd
+  prepared_directory: data/LEVIR-CD
