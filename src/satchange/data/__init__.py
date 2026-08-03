@@ -6,9 +6,12 @@ from satchange.data.levir_cd import(
     LEVIRCDDataset
 )
 
+from satchange.data.transforms import RandomFlipRotate
+
 __all__ = [
     "prepare_levir_cd",
     "validate_levir_cd",
-    "LEVIRCDDataset"
+    "LEVIRCDDataset",
+    "RandomFlipRotate",
 ]
 

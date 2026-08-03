@@ -9,6 +9,7 @@ import numpy as np
 import torch
 from PIL import Image
 from torch.utils.data import Dataset
+from collections.abc import Callable
 
 
 IMAGE_EXTENSIONS = {
@@ -344,6 +345,10 @@ class LEVIRCDDataset(Dataset):
         dataset_root: str | Path,
         split: str,
         image_size: int | None,
+        transform: Callable[
+            [dict[str, torch.Tensor | str]],
+            dict[str, torch.Tensor | str],
+        ] | None = None,
     ) -> None:
         """Initialize one LEVIR-CD dataset split."""
 
@@ -362,6 +367,7 @@ class LEVIRCDDataset(Dataset):
         self.split = split
         self.image_size = image_size
         self.split_directory = self.dataset_root / split
+        self.transform = transform
 
         (
             self.sample_ids,
@@ -397,12 +403,17 @@ class LEVIRCDDataset(Dataset):
             self.label_files[sample_id]
         )
 
-        return {
+        sample: dict[str, torch.Tensor | str] = {
             "before": before,
             "after": after,
             "mask": mask,
             "sample_id": sample_id,
         }
+
+        if self.transform is not None:
+            sample = self.transform(sample)
+
+        return sample
 
 
     def _load_rgb_image(
