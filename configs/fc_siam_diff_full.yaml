@@ -11,10 +11,10 @@ model:
   parameters:
     in_channels: 3
     out_channels: 1
-    base_channels: [16, 32]
+    base_channels: 16
 
 data:
-  image_size: Null
+  image_size: null
   batch_size: 2
   num_workers: 0
 
@@ -30,7 +30,7 @@ training:
   threshold: 0.5
 
 output:
-  directory: artifacts/fc_siam_diff
+  directory: artifacts/fc_siam_diff_full
   checkpoint_name: best.pt
 
 

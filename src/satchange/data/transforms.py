@@ -35,7 +35,7 @@ class RandomFlipRotate:
     def __call__(
         self,
         sample: dict[str, torch.Tensor | str],
-    ) -> dict[str, torch.tensor | str]:
+    ) -> dict[str, torch.Tensor | str]:
         """Transform one aligned before-after-mask sample."""
 
         before = sample["before"]
