@@ -14,7 +14,7 @@ model:
     base_channels: [16, 32]
 
 data:
-  image_size: None
+  image_size: Null
   batch_size: 2
   num_workers: 0
 
