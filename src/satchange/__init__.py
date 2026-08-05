@@ -2,10 +2,13 @@
 
 from satchange.losses import (
     DiceLoss,
-    BCEDiceloss,
+    BCEDiceLoss,
 )
 
+from satchange.metrics import BinaryChangeMetrics
+
 __all__ = [
+    "BinaryChangeMetrics",
     "DiceLoss",
-    "BCEDiceloss",
+    "BCEDiceLoss",
 ]

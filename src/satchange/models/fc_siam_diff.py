@@ -275,17 +275,17 @@ class FCSiamDiff(nn.Module):
                     f"{skip_difference.shape[2:]}."
                 )
 
-        # torch.cat concatenate values along channel dimension
-        current = torch.cat(
-            [
-                current,
-                skip_difference,
-            ],
-            dim=1,
-        )
+            # torch.cat concatenate values along channel dimension
+            current = torch.cat(
+                [
+                    current,
+                    skip_difference,
+                ],
+                dim=1,
+            )
 
-        # Put furhter to ConvBlock (Conv2d, ReLU, Conv2d and ReLU)
-        current = decoder_block(current)
+            # Put furhter to ConvBlock (Conv2d, ReLU, Conv2d and ReLU)
+            current = decoder_block(current)
 
         return current
 
