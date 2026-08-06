@@ -3,6 +3,7 @@
 from pathlib import Path
 from typing import Any
 
+import time
 import torch
 from torch import nn
 from torch.optim import Optimizer
@@ -399,6 +400,8 @@ def fit_binary_change_model(
     checkpoint_interval: int = 5,
     config: dict[str, Any] | None = None,
     resume_from: str | Path | None = None,
+    scheduler: Any | None = None,
+    log_prefix: str = "",
 ) -> list[dict[str, Any]]:
     """Train or resume a binary change-detection model."""
 
@@ -536,6 +539,21 @@ def fit_binary_change_model(
             checkpoint["optimizer_state_dict"]
         )
 
+        saved_scheduler_state = checkpoint.get(
+            "scheduler_state_dict"
+        )
+
+        if saved_scheduler_state is not None:
+            if scheduler is None:
+                raise ValueError(
+                    "The checkpoint contains scheduler state, "
+                    "but no scheduler was provided."
+                )
+
+            scheduler.load_state_dict(
+                saved_scheduler_state
+            )
+
         saved_epoch = int(
             checkpoint["epoch"]
         )
@@ -595,6 +613,21 @@ def fit_binary_change_model(
         start_epoch,
         final_epoch + 1,
     ):
+        # Synchronize previous CUDA work before starting the timer.
+        if device.type == "cuda":
+            torch.cuda.synchronize(
+                device
+            )
+
+            # Reset peak-memory statistics for this epoch.
+            torch.cuda.reset_peak_memory_stats(
+                device
+            )
+
+        epoch_started_at = (
+            time.perf_counter()
+        )
+
         train_loss = train_one_epoch(
             model=model,
             data_loader=train_loader,
@@ -618,6 +651,46 @@ def fit_binary_change_model(
             key=lambda result: result["f1"],
         )
 
+        learning_rate = float(
+            optimizer.param_groups[0]["lr"]
+        )
+
+        if scheduler is not None:
+            if isinstance(
+                scheduler,
+                torch.optim.lr_scheduler.ReduceLROnPlateau,
+            ):
+                scheduler.step(
+                    best_threshold_result["f1"]
+                )
+            else:
+                scheduler.step()
+        
+        next_learning_rate = float(
+            optimizer.param_groups[0]["lr"]
+        )
+
+        if device.type == "cuda":
+            torch.cuda.synchronize(
+                device
+            )
+
+        epoch_seconds = (
+            time.perf_counter()
+            - epoch_started_at
+        )
+
+        if device.type == "cuda":
+            peak_gpu_memory_mb = (
+                torch.cuda.max_memory_allocated(
+                    device
+                )
+                / 1024 ** 2
+            )
+        else:
+            peak_gpu_memory_mb = 0.0
+
+        
         threshold_05_result = next(
             (
                 result
@@ -695,6 +768,10 @@ def fit_binary_change_model(
                 mean_unchanged_probability
             ),
             "probability_gap": probability_gap,
+            "learning_rate": learning_rate,
+            "next_learning_rate": next_learning_rate,
+            "epoch_seconds": epoch_seconds,
+            "peak_gpu_memory_mb": peak_gpu_memory_mb,
         }
 
         metric_history.append(
@@ -735,6 +812,11 @@ def fit_binary_change_model(
                 metric_history
             ),
             "config": config,
+            "scheduler_state_dict": (
+                scheduler.state_dict()
+                if scheduler is not None
+                else None
+            ),
         }
 
         _save_checkpoint(
@@ -772,7 +854,7 @@ def fit_binary_change_model(
         print()
         print("=" * 80)
         print(
-            f"Epoch {epoch}/{final_epoch}"
+            f"{log_prefix}Epoch {epoch}/{final_epoch}"
         )
         print("=" * 80)
 
