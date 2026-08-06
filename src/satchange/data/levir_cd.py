@@ -8,8 +8,13 @@ import gdown
 import numpy as np
 import torch
 from PIL import Image
-from torch.utils.data import Dataset
+from torch.utils.data import (
+    Dataset,
+    DataLoader,
+)
 from collections.abc import Callable
+
+
 
 
 IMAGE_EXTENSIONS = {
@@ -477,3 +482,51 @@ class LEVIRCDDataset(Dataset):
         ).unsqueeze(0)
 
         return mask_tensor.contiguous()
+
+
+def create_dataset_dataloader(
+    dataset_root: str | Path,
+    split: str,
+    image_size: int | None,
+    batch_size: int,
+    num_workers: int,
+    transform: Callable[
+        [dict[str, Any]],
+        dict[str, Any],
+    ] | None = None,
+    shuffle: bool = False,
+    pin_memory: bool = False,
+    drop_last: bool = False,
+    generator: torch.Generator | None = None,
+    seed: int | None = None,
+) -> tuple[LEVIRCDDataset, DataLoader]:
+    """Create one LEVIR-CD dataset split and its data loader."""
+
+    if seed is not None and seed < 0:
+        raise ValueError("seed cannot be negative.")
+
+    dataset = LEVIRCDDataset(
+        dataset_root=dataset_root,
+        split=split,
+        image_size=image_size,
+        transform=transform,
+    )
+
+    generator = None
+
+    if shuffle and seed is not None:
+        generator = torch.Generator()
+        generator.manual_seed(seed)
+
+
+    data_loader = DataLoader(
+        dataset=dataset,
+        batch_size=batch_size,
+        shuffle=shuffle,
+        num_workers=num_workers,
+        pin_memory=pin_memory,
+        drop_last=drop_last,
+        generator=generator,
+    )
+
+    return dataset, data_loader
