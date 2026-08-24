@@ -378,12 +378,28 @@ def run_parameter_search(
     trial_space = []
 
     for trial_number, search_parameters in enumerate(
-        search_trials
+    search_trials
     ):
         parameters = {
             **fixed_parameters,
             **search_parameters,
         }
+
+        if "loss_weights" in parameters:
+            loss_weights = parameters.pop(
+                "loss_weights"
+            )
+
+            if len(loss_weights) != 2:
+                raise ValueError(
+                    "loss_weights must contain "
+                    "(bce_weight, dice_weight)."
+                )
+
+            (
+                parameters["bce_weight"],
+                parameters["dice_weight"],
+            ) = loss_weights
 
         trial_space.append(
             (

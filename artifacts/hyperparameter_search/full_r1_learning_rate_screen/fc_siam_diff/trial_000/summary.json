@@ -1,0 +1,33 @@
+{
+  "trial": 0,
+  "status": "completed",
+  "gpu_id": 0,
+  "parameters": {
+    "scheduler": "none",
+    "positive_weight": 10,
+    "bce_weight": 0.3,
+    "dice_weight": 0.7,
+    "weight_decay": 0.0001,
+    "batch_size": 8,
+    "image_size": null,
+    "num_workers": 0,
+    "seed": 42,
+    "model_parameters": {
+      "in_channels": 3,
+      "out_channels": 1,
+      "base_channels": 16
+    },
+    "learning_rate": 0.0003
+  },
+  "best_epoch": 19,
+  "best_threshold": 0.95,
+  "best_validation_loss": 0.45847325772047043,
+  "best_precision": 0.7323063908516514,
+  "best_recall": 0.7032860509014057,
+  "best_f1": 0.7175028994204057,
+  "best_iou": 0.5594577165875442,
+  "training_seconds": 4745.049504611641,
+  "seconds_per_epoch": 237.25247523058206,
+  "gpu_hours": 1.318069306836567,
+  "peak_gpu_memory_mb": 12599.78125
+}

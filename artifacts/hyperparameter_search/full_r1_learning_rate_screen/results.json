@@ -1,0 +1,140 @@
+{
+  "model_name": "fc_siam_diff",
+  "search_name": "full_r1_learning_rate_screen",
+  "number_of_trials": 4,
+  "total_gpu_hours": 5.190838695828958,
+  "results": [
+    {
+      "trial": 1,
+      "status": "completed",
+      "gpu_id": 1,
+      "parameters": {
+        "scheduler": "none",
+        "positive_weight": 10,
+        "bce_weight": 0.3,
+        "dice_weight": 0.7,
+        "weight_decay": 0.0001,
+        "batch_size": 8,
+        "image_size": null,
+        "num_workers": 0,
+        "seed": 42,
+        "model_parameters": {
+          "in_channels": 3,
+          "out_channels": 1,
+          "base_channels": 16
+        },
+        "learning_rate": 0.0006
+      },
+      "best_epoch": 19,
+      "best_threshold": 0.9,
+      "best_validation_loss": 0.4212138131260872,
+      "best_precision": 0.7326727134321976,
+      "best_recall": 0.7812622946395726,
+      "best_f1": 0.7561877653452147,
+      "best_iou": 0.6079597420547092,
+      "training_seconds": 4706.058398650028,
+      "seconds_per_epoch": 235.3029199325014,
+      "gpu_hours": 1.3072384440694522,
+      "peak_gpu_memory_mb": 12599.78125
+    },
+    {
+      "trial": 0,
+      "status": "completed",
+      "gpu_id": 0,
+      "parameters": {
+        "scheduler": "none",
+        "positive_weight": 10,
+        "bce_weight": 0.3,
+        "dice_weight": 0.7,
+        "weight_decay": 0.0001,
+        "batch_size": 8,
+        "image_size": null,
+        "num_workers": 0,
+        "seed": 42,
+        "model_parameters": {
+          "in_channels": 3,
+          "out_channels": 1,
+          "base_channels": 16
+        },
+        "learning_rate": 0.0003
+      },
+      "best_epoch": 19,
+      "best_threshold": 0.95,
+      "best_validation_loss": 0.45847325772047043,
+      "best_precision": 0.7323063908516514,
+      "best_recall": 0.7032860509014057,
+      "best_f1": 0.7175028994204057,
+      "best_iou": 0.5594577165875442,
+      "training_seconds": 4745.049504611641,
+      "seconds_per_epoch": 237.25247523058206,
+      "gpu_hours": 1.318069306836567,
+      "peak_gpu_memory_mb": 12599.78125
+    },
+    {
+      "trial": 2,
+      "status": "completed",
+      "gpu_id": 2,
+      "parameters": {
+        "scheduler": "none",
+        "positive_weight": 10,
+        "bce_weight": 0.3,
+        "dice_weight": 0.7,
+        "weight_decay": 0.0001,
+        "batch_size": 8,
+        "image_size": null,
+        "num_workers": 0,
+        "seed": 42,
+        "model_parameters": {
+          "in_channels": 3,
+          "out_channels": 1,
+          "base_channels": 16
+        },
+        "learning_rate": 0.001
+      },
+      "best_epoch": 19,
+      "best_threshold": 0.95,
+      "best_validation_loss": 0.4947202019393444,
+      "best_precision": 0.7260434725642813,
+      "best_recall": 0.6788363181344957,
+      "best_f1": 0.7016467615011718,
+      "best_iou": 0.5404128404319493,
+      "training_seconds": 4500.7269926555455,
+      "seconds_per_epoch": 225.03634963277727,
+      "gpu_hours": 1.2502019424043183,
+      "peak_gpu_memory_mb": 12599.78125
+    },
+    {
+      "trial": 3,
+      "status": "completed",
+      "gpu_id": 3,
+      "parameters": {
+        "scheduler": "none",
+        "positive_weight": 10,
+        "bce_weight": 0.3,
+        "dice_weight": 0.7,
+        "weight_decay": 0.0001,
+        "batch_size": 8,
+        "image_size": null,
+        "num_workers": 0,
+        "seed": 42,
+        "model_parameters": {
+          "in_channels": 3,
+          "out_channels": 1,
+          "base_channels": 16
+        },
+        "learning_rate": 0.002
+      },
+      "best_epoch": 19,
+      "best_threshold": 0.75,
+      "best_validation_loss": 0.6752788126468658,
+      "best_precision": 0.4512954406465241,
+      "best_recall": 0.47086995981916496,
+      "best_f1": 0.4608749491067198,
+      "best_iou": 0.29943957369756036,
+      "training_seconds": 4735.184409067035,
+      "seconds_per_epoch": 236.75922045335173,
+      "gpu_hours": 1.3153290025186208,
+      "peak_gpu_memory_mb": 12599.78125
+    }
+  ]
+}
