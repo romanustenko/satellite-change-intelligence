@@ -1,13 +1,15 @@
 ﻿"""Reusable model training and validation pipeline."""
 
+import time
 from pathlib import Path
 from typing import Any
 
-import time
 import torch
 from torch import nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
+
+from satchange.metrics import BinaryChangeMetrics
 
 
 def _save_checkpoint(
@@ -125,13 +127,8 @@ def evaluate_thresholds(
     total_loss = 0.0
     total_samples = 0
 
-    confusion_counts = {
-        threshold: {
-            "tp": 0,
-            "fp": 0,
-            "fn": 0,
-            "tn": 0,
-        }
+    threshold_metrics = {
+        threshold: BinaryChangeMetrics(threshold=threshold)
         for threshold in thresholds
     }
 
@@ -241,46 +238,8 @@ def evaluate_thresholds(
                 unchanged_probabilities.max().item(),
             )
 
-        for threshold in thresholds:
-            predictions = (
-                probabilities >= threshold
-            )
-
-            true_positive = torch.logical_and(
-                predictions,
-                target_mask,
-            ).sum()
-
-            false_positive = torch.logical_and(
-                predictions,
-                ~target_mask,
-            ).sum()
-
-            false_negative = torch.logical_and(
-                ~predictions,
-                target_mask,
-            ).sum()
-
-            true_negative = torch.logical_and(
-                ~predictions,
-                ~target_mask,
-            ).sum()
-
-            confusion_counts[threshold]["tp"] += int(
-                true_positive.item()
-            )
-
-            confusion_counts[threshold]["fp"] += int(
-                false_positive.item()
-            )
-
-            confusion_counts[threshold]["fn"] += int(
-                false_negative.item()
-            )
-
-            confusion_counts[threshold]["tn"] += int(
-                true_negative.item()
-            )
+        for metrics in threshold_metrics.values():
+            metrics.update_probabilities(probabilities, mask)
 
     if total_samples == 0:
         raise RuntimeError(
@@ -290,57 +249,20 @@ def evaluate_thresholds(
     threshold_results = []
 
     for threshold in thresholds:
-        counts = confusion_counts[threshold]
-
-        tp = counts["tp"]
-        fp = counts["fp"]
-        fn = counts["fn"]
-        tn = counts["tn"]
-
-        precision_denominator = tp + fp
-        recall_denominator = tp + fn
-        f1_denominator = 2 * tp + fp + fn
-        iou_denominator = tp + fp + fn
-        total_pixels = tp + fp + fn + tn
-
-        precision = (
-            tp / precision_denominator
-            if precision_denominator > 0
-            else 0.0
-        )
-
-        recall = (
-            tp / recall_denominator
-            if recall_denominator > 0
-            else 0.0
-        )
-
-        f1 = (
-            2 * tp / f1_denominator
-            if f1_denominator > 0
-            else 0.0
-        )
-
-        iou = (
-            tp / iou_denominator
-            if iou_denominator > 0
-            else 0.0
-        )
-
-        accuracy = (
-            (tp + tn) / total_pixels
-            if total_pixels > 0
-            else 0.0
-        )
+        result = threshold_metrics[threshold].compute()
+        tp = int(result["true_positive"])
+        fp = int(result["false_positive"])
+        fn = int(result["false_negative"])
+        tn = int(result["true_negative"])
 
         threshold_results.append(
             {
                 "threshold": threshold,
-                "precision": precision,
-                "recall": recall,
-                "f1": f1,
-                "iou": iou,
-                "accuracy": accuracy,
+                "precision": result["precision"],
+                "recall": result["recall"],
+                "f1": result["f1"],
+                "iou": result["iou"],
+                "accuracy": result["accuracy"],
                 "tp": tp,
                 "fp": fp,
                 "fn": fn,
@@ -665,7 +587,7 @@ def fit_binary_change_model(
                 )
             else:
                 scheduler.step()
-        
+
         next_learning_rate = float(
             optimizer.param_groups[0]["lr"]
         )
@@ -690,7 +612,7 @@ def fit_binary_change_model(
         else:
             peak_gpu_memory_mb = 0.0
 
-        
+
         threshold_05_result = next(
             (
                 result

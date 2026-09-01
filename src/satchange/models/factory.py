@@ -5,12 +5,26 @@ from typing import Any
 
 from torch import nn
 
+from satchange.models.bit import BIT
 from satchange.models.fc_siam_diff import FCSiamDiff
 
-
-MODEL_REGISTRY = {
+MODEL_REGISTRY: dict[str, type[nn.Module]] = {
+    "bit": BIT,
     "fc_siam_diff": FCSiamDiff,
 }
+
+
+def count_model_parameters(
+    model: nn.Module,
+) -> dict[str, int]:
+    """Return total and trainable parameter counts for a model."""
+
+    return {
+        "total_parameters": sum(parameter.numel() for parameter in model.parameters()),
+        "trainable_parameters": sum(
+            parameter.numel() for parameter in model.parameters() if parameter.requires_grad
+        ),
+    }
 
 
 def create_change_model(

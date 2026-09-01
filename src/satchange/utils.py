@@ -2,10 +2,11 @@
 
 from pathlib import Path
 from typing import Any
+
 # the dependence typing is necessary in order to allow every type in
 # yaml to be used
-
 import yaml
+
 
 def load_config(
     path: str | Path,
@@ -20,7 +21,7 @@ def load_config(
         )
 
     if not config_path.is_file():
-        raise VlaueError(
+        raise ValueError(
             f"Configuration path is not a file: {config_path}"
         )
 

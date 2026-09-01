@@ -1,16 +1,17 @@
 """Hyperparameter-search utilities."""
 
+import json
+import multiprocessing as mp
+import random
+import time
 from concurrent.futures import (
     FIRST_COMPLETED,
     ProcessPoolExecutor,
     wait,
 )
+from copy import deepcopy
 from itertools import product
-import json
-import multiprocessing as mp
 from pathlib import Path
-import random
-import time
 from typing import Any
 
 import numpy as np
@@ -22,6 +23,7 @@ from satchange.data import (
 )
 from satchange.losses import BCEDiceLoss
 from satchange.models.factory import (
+    count_model_parameters,
     create_change_model,
 )
 from satchange.training import (
@@ -68,11 +70,50 @@ def _expand_search_space(
                 zip(
                     parameter_names,
                     combination,
+                    strict=True,
                 )
             )
         )
 
     return trials
+
+
+def _build_trial_parameters(
+    fixed_parameters: dict[str, Any],
+    search_parameters: dict[str, Any],
+) -> dict[str, Any]:
+    """Merge one trial without mutating the fixed or searched parameter mappings."""
+
+    parameters = deepcopy(fixed_parameters)
+    nested_parameters = parameters.get("model_parameters", {})
+    if not isinstance(nested_parameters, dict):
+        raise ValueError("model_parameters must be a dictionary.")
+
+    for name in tuple(parameters):
+        if name.startswith("model__"):
+            model_parameter_name = name.removeprefix("model__")
+            if not model_parameter_name:
+                raise ValueError("model__ search parameters must name a model parameter.")
+            nested_parameters[model_parameter_name] = parameters.pop(name)
+
+    for name, value in search_parameters.items():
+        if name.startswith("model__"):
+            model_parameter_name = name.removeprefix("model__")
+            if not model_parameter_name:
+                raise ValueError("model__ search parameters must name a model parameter.")
+            nested_parameters[model_parameter_name] = deepcopy(value)
+        else:
+            parameters[name] = deepcopy(value)
+
+    parameters["model_parameters"] = nested_parameters
+
+    if "loss_weights" in parameters:
+        loss_weights = parameters.pop("loss_weights")
+        if not isinstance(loss_weights, (list, tuple)) or len(loss_weights) != 2:
+            raise ValueError("loss_weights must contain (bce_weight, dice_weight).")
+        parameters["bce_weight"], parameters["dice_weight"] = loss_weights
+
+    return parameters
 
 def _create_scheduler(
     optimizer: torch.optim.Optimizer,
@@ -184,6 +225,8 @@ def _run_single_trial(
         ],
     ).to(device)
 
+    parameter_counts = count_model_parameters(model)
+
     loss_function = BCEDiceLoss(
         bce_weight=parameters[
             "bce_weight"
@@ -275,6 +318,7 @@ def _run_single_trial(
         "trial": trial_number,
         "status": "completed",
         "gpu_id": gpu_id,
+        **parameter_counts,
         "parameters": parameters,
         "best_epoch": (
             best_result["epoch"]
@@ -380,26 +424,10 @@ def run_parameter_search(
     for trial_number, search_parameters in enumerate(
     search_trials
     ):
-        parameters = {
-            **fixed_parameters,
-            **search_parameters,
-        }
-
-        if "loss_weights" in parameters:
-            loss_weights = parameters.pop(
-                "loss_weights"
-            )
-
-            if len(loss_weights) != 2:
-                raise ValueError(
-                    "loss_weights must contain "
-                    "(bce_weight, dice_weight)."
-                )
-
-            (
-                parameters["bce_weight"],
-                parameters["dice_weight"],
-            ) = loss_weights
+        parameters = _build_trial_parameters(
+            fixed_parameters=fixed_parameters,
+            search_parameters=search_parameters,
+        )
 
         trial_space.append(
             (

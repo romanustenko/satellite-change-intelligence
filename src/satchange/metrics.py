@@ -1,25 +1,41 @@
-﻿"""Segmentation, calibration and selective prediction metrics."""
-
-# Recall: Of all real changed pixels, how many did the model find?
-
-# Precision: Of all pixels that were predicted as changed, how many really changed?
-
-# IoU (Intersection over Union): How large is the predicted as changed region compared with the complete region
-# marked as changed? It compares not only the size of the region, but also the coordinates of pixels.abs
-# INTERSECTION over UNION: two regions were united and then intersected by the region marked as changed.abs
-
-
-# F1 depends on Recall and Precision. When Recall: 1 and Precision: 0 -> F:0.
-# Investigation allows us to conclude whose is this problem.
-
-# Accuracy has to be considered only in the pair with F1 / IoU because the model can detect 0 changed pixels,
-# because there are only 5 changed pixels, and have high accuracy, but low F1 or IoU.abs
-
+"""Reusable binary change-detection metrics."""
 
 import torch
 
+
+def binary_metrics_from_counts(
+    true_positive: int,
+    false_positive: int,
+    false_negative: int,
+    true_negative: int,
+) -> dict[str, float | int]:
+    """Compute binary pixel metrics from globally accumulated counts."""
+
+    precision_denominator = true_positive + false_positive
+    recall_denominator = true_positive + false_negative
+    f1_denominator = 2 * true_positive + false_positive + false_negative
+    iou_denominator = true_positive + false_positive + false_negative
+    total_pixels = true_positive + false_positive + false_negative + true_negative
+
+    return {
+        "true_positive": true_positive,
+        "false_positive": false_positive,
+        "false_negative": false_negative,
+        "true_negative": true_negative,
+        "precision": (
+            true_positive / precision_denominator if precision_denominator > 0 else 0.0
+        ),
+        "recall": true_positive / recall_denominator if recall_denominator > 0 else 0.0,
+        "f1": 2 * true_positive / f1_denominator if f1_denominator > 0 else 0.0,
+        "iou": true_positive / iou_denominator if iou_denominator > 0 else 0.0,
+        "accuracy": (
+            (true_positive + true_negative) / total_pixels if total_pixels > 0 else 0.0
+        ),
+    }
+
+
 class BinaryChangeMetrics:
-    """Accumulate confusion counts and compute binary pixel metrics."""
+    """Accumulate global confusion counts and compute binary pixel metrics."""
 
     def __init__(
         self,
@@ -28,10 +44,7 @@ class BinaryChangeMetrics:
         """Initialize the metric accumulator."""
 
         if not 0.0 < threshold < 1.0:
-            raise ValueError(
-                "Threshold must be between 0 and 1."
-            )
-
+            raise ValueError("Threshold must be between 0 and 1.")
 
         self.threshold = threshold
         self.reset()
@@ -50,109 +63,38 @@ class BinaryChangeMetrics:
         logits: torch.Tensor,
         targets: torch.Tensor,
     ) -> None:
-        """Add confusion conunts from one batch."""
+        """Convert logits to probabilities and add one batch of counts."""
 
-        if logits.shape != targets.shape:
+        self.update_probabilities(torch.sigmoid(logits), targets)
+
+    @torch.no_grad()
+    def update_probabilities(
+        self,
+        probabilities: torch.Tensor,
+        targets: torch.Tensor,
+    ) -> None:
+        """Add one batch of counts from precomputed probabilities."""
+
+        if probabilities.shape != targets.shape:
             raise ValueError(
-                "Logits and targets must have identical shapes. "
-                f"Received {logits.shape} and {targets.shape}."
+                "Probabilities and targets must have identical shapes. "
+                f"Received {probabilities.shape} and {targets.shape}."
             )
 
-        probabilities = torch.sigmoid(logits)
-
-        predictions = (
-            probabilities >= self.threshold
-        )
-
+        predictions = probabilities >= self.threshold
         target_mask = targets >= 0.5
 
-        true_positive = torch.logical_and(
-            predictions,
-            target_mask,
-        ).sum()
+        self.true_positive += int(torch.logical_and(predictions, target_mask).sum().item())
+        self.false_positive += int(torch.logical_and(predictions, ~target_mask).sum().item())
+        self.false_negative += int(torch.logical_and(~predictions, target_mask).sum().item())
+        self.true_negative += int(torch.logical_and(~predictions, ~target_mask).sum().item())
 
-        false_positive = torch.logical_and(
-            predictions,
-            ~target_mask,
-        ).sum()
-
-        true_negative = torch.logical_and(
-            ~predictions,
-            ~target_mask,
-        ).sum()
-
-        false_negative = torch.logical_and(
-            ~predictions,
-            target_mask,
-        ).sum()
-
-        self.true_positive += int(
-            true_positive.item()
-        )
-        self.false_positive += int(
-            false_positive.item()
-        )
-        self.false_negative += int(
-            false_negative.item()
-        )
-        self.true_negative += int(
-            true_negative.item()
-        )
-
-    def compute(
-        self,
-    ) -> dict[str, float | int]:
+    def compute(self) -> dict[str, float | int]:
         """Compute metrics from all accumulated confusion counts."""
 
-        tp = self.true_positive
-        fp = self.false_positive
-        tn = self.true_negative
-        fn = self.false_negative
-
-        precision_denominator = tp + fp
-        recall_denominator = tp + fn
-        f1_denominator = 2 * tp + fp + fn
-        iou_denominator = tp + fp + fn
-        total_pixels = tp + fp + fn + tn
-
-        precision = (
-            tp / precision_denominator
-            if precision_denominator > 0
-            else 0.0
+        return binary_metrics_from_counts(
+            true_positive=self.true_positive,
+            false_positive=self.false_positive,
+            false_negative=self.false_negative,
+            true_negative=self.true_negative,
         )
-
-        recall = (
-            tp / recall_denominator
-            if recall_denominator > 0
-            else 0.0
-        )
-
-        f1 = (
-            2 * tp / f1_denominator
-            if f1_denominator > 0
-            else 0.0
-        )
-
-        iou = (
-            tp / iou_denominator
-            if iou_denominator > 0
-            else 0.0
-        )
-
-        accuracy = (
-            (tp + tn) / total_pixels
-            if total_pixels > 0
-            else 0.0
-        )
-
-        return {
-            "true_positive": tp,
-            "false_positive": fp,
-            "false_negative": fn,
-            "true_negative": tn,
-            "precision": precision,
-            "recall": recall,
-            "f1": f1,
-            "iou": iou,
-            "accuracy": accuracy,
-        }
