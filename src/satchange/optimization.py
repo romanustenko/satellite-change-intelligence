@@ -9,6 +9,7 @@ from concurrent.futures import (
     ProcessPoolExecutor,
     wait,
 )
+import os
 from copy import deepcopy
 from itertools import product
 from pathlib import Path
@@ -180,6 +181,14 @@ def _run_single_trial(
 ) -> dict[str, Any]:
     """Run one independent training trial."""
 
+    
+    os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
+
+    torch.use_deterministic_algorithms(True)
+
+    torch.backends.cudnn.benchmark = False
+    torch.backends.cudnn.deterministic = True
+
     device = torch.device(
         f"cuda:{gpu_id}"
     )
@@ -187,6 +196,16 @@ def _run_single_trial(
     torch.cuda.set_device(
         device
     )
+
+    print(
+        f"[Trial {trial_number:03d} | GPU {gpu_id}] "
+        f"deterministic_algorithms="
+        f"{torch.are_deterministic_algorithms_enabled()} | "
+        f"cudnn_deterministic="
+        f"{torch.backends.cudnn.deterministic} | "
+        f"cudnn_benchmark=" 
+        f"{torch.backends.cudnn.benchmark}" 
+    )   
 
     seed = int(
         parameters["seed"]
