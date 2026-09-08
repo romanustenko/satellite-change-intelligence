@@ -146,6 +146,27 @@ def _create_scheduler(
     )
 
 
+def _format_trial_parameters(parameters: dict[str, Any]) -> str:
+    """Return training and resolved architecture parameters as one compact line."""
+
+    return " | ".join(
+        [
+            f"seed={parameters.get('seed')}",
+            f"lr={parameters.get('learning_rate')}",
+            f"wd={parameters.get('weight_decay')}",
+            f"pw={parameters.get('positive_weight')}",
+            f"BCE/Dice={parameters.get('bce_weight')}/{parameters.get('dice_weight')}",
+            f"batch={parameters.get('batch_size')}",
+            f"image_size={parameters.get('image_size')}",
+            *[
+                f"{name}={value}"
+                for name, value in parameters.get("model_parameters", {}).items()
+            ],
+            f"scheduler={parameters.get('scheduler')}",
+        ]
+    )
+
+
 def _run_single_trial(
     trial_number: int,
     parameters: dict[str, Any],
@@ -515,6 +536,15 @@ def run_parameter_search(
         except StopIteration:
             return False
 
+        print(
+            f"\n{'=' * 100}\n"
+            f"[START] Trial {trial_number:03d} -> GPU {gpu_id}\n"
+            f"{_format_trial_parameters(parameters)}\n"
+            f"epochs={number_of_epochs}\n"
+            f"{'=' * 100}",
+            flush=True,
+        )
+
         future = executors[
             gpu_id
         ].submit(
@@ -565,6 +595,16 @@ def run_parameter_search(
                 print(
                     f"Trial {result['trial']} "
                     f"finished on GPU {gpu_id}"
+                )
+
+                print(
+                    "Parameters:",
+                    _format_trial_parameters(result["parameters"]),
+                )
+                print(
+                    "Model parameters:",
+                    f"total={result['total_parameters']:,} | "
+                    f"trainable={result['trainable_parameters']:,}",
                 )
 
                 print(
