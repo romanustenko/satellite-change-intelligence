@@ -9,6 +9,16 @@ from torch import nn
 from torch.optim import Optimizer
 from torch.utils.data import DataLoader
 
+from satchange.execution import (
+    capture_rng,
+    gather_objects,
+    on_rank_zero,
+    precision_context,
+    rank,
+    restore_rng,
+    unwrap,
+    world_size,
+)
 from satchange.metrics import BinaryChangeMetrics
 
 
@@ -17,6 +27,9 @@ def _save_checkpoint(
     checkpoint_state: dict[str, Any],
 ) -> None:
     """Save one training checkpoint."""
+
+    if rank() != 0:
+        return
 
     checkpoint_path.parent.mkdir(
         parents=True,
@@ -35,9 +48,11 @@ def train_one_epoch(
     loss_function: nn.Module,
     optimizer: Optimizer,
     device: torch.device,
+    precision: str = "fp32",
 ) -> float:
     """Train the model for one complete epoch."""
 
+    precision_context(device, precision)
     model.train()
 
     total_loss = 0.0
@@ -64,15 +79,11 @@ def train_one_epoch(
             set_to_none=True,
         )
 
-        logits = model(
-            before,
-            after,
-        )
-
-        loss = loss_function(
-            logits,
-            mask,
-        )
+        with precision_context(device, precision):
+            logits = model(before, after)
+        # FP32 loss/probability reductions also under BF16 autocast execution.
+        logits = logits.float()
+        loss = loss_function(logits, mask)
 
         if not torch.isfinite(loss):
             raise RuntimeError(
@@ -107,6 +118,7 @@ def evaluate_thresholds(
     loss_function: nn.Module,
     device: torch.device,
     thresholds: list[float],
+    precision: str = "fp32",
 ) -> dict[str, Any]:
     """Evaluate one fixed model at multiple probability thresholds."""
 
@@ -122,6 +134,7 @@ def evaluate_thresholds(
                 f"Received {threshold}."
             )
 
+    precision_context(device, precision)
     model.eval()
 
     total_loss = 0.0
@@ -161,15 +174,11 @@ def evaluate_thresholds(
             non_blocking=True,
         )
 
-        logits = model(
-            before,
-            after,
-        )
-
-        loss = loss_function(
-            logits,
-            mask,
-        )
+        with precision_context(device, precision):
+            logits = model(before, after)
+        # FP32 loss/probability reductions also under BF16 autocast execution.
+        logits = logits.float()
+        loss = loss_function(logits, mask)
 
         if not torch.isfinite(loss):
             raise RuntimeError(
@@ -324,6 +333,7 @@ def fit_binary_change_model(
     resume_from: str | Path | None = None,
     scheduler: Any | None = None,
     log_prefix: str = "",
+    precision: str = "fp32",
 ) -> list[dict[str, Any]]:
     """Train or resume a binary change-detection model."""
 
@@ -345,6 +355,8 @@ def fit_binary_change_model(
             "checkpoint_interval must be a positive integer."
         )
 
+    precision_context(device, precision)
+    bare_model = unwrap(model)
     model_name = model_name.strip()
     run_name = run_name.strip()
 
@@ -453,7 +465,19 @@ def fit_binary_change_model(
                 f"received '{saved_run_name}'."
             )
 
-        model.load_state_dict(
+        if checkpoint.get("world_size", 1) != world_size():
+            raise ValueError("Exact resume requires the same world size.")
+        if checkpoint.get("precision", "fp32") != precision:
+            raise ValueError("Resume precision differs from the saved experiment.")
+        saved_config = checkpoint.get("config")
+        if config is not None and saved_config is not None:
+            def architecture(value: dict[str, Any]) -> Any:
+                return value.get("model_parameters", value.get("model", {}).get("parameters"))
+            if architecture(config) != architecture(saved_config):
+                raise ValueError("Resume architecture parameters differ from checkpoint metadata.")
+        if "rng_states" in checkpoint:
+            restore_rng(checkpoint["rng_states"][rank()], train_loader)
+        bare_model.load_state_dict(
             checkpoint["model_state_dict"]
         )
 
@@ -550,21 +574,26 @@ def fit_binary_change_model(
             time.perf_counter()
         )
 
+        if hasattr(train_loader.sampler, "set_epoch"):
+            train_loader.sampler.set_epoch(epoch)
         train_loss = train_one_epoch(
             model=model,
             data_loader=train_loader,
             loss_function=loss_function,
             optimizer=optimizer,
             device=device,
+            precision=precision,
         )
 
-        validation_results = evaluate_thresholds(
-            model=model,
+        train_loss = sum(gather_objects(train_loss)) / world_size()
+        validation_results = on_rank_zero(lambda: evaluate_thresholds(
+            model=bare_model,
             data_loader=validation_loader,
             loss_function=loss_function,
             device=device,
             thresholds=thresholds,
-        )
+            precision=precision,
+        ))
 
         best_threshold_result = max(
             validation_results[
@@ -714,12 +743,24 @@ def fit_binary_change_model(
                 epoch_metrics
             )
 
+        memory_by_rank = gather_objects({
+            "rank": rank(), "peak_allocated_mib": peak_gpu_memory_mb,
+            "peak_reserved_mib": (torch.cuda.max_memory_reserved(device) / 1024 ** 2
+                                  if device.type == "cuda" else 0.0),
+        })
+        epoch_metrics["memory_by_rank"] = memory_by_rank
+        epoch_metrics["max_device_peak_allocated_mib"] = max(
+            item["peak_allocated_mib"] for item in memory_by_rank)
+        epoch_metrics["gpu_hours"] = max(gather_objects(epoch_seconds)) * (
+            world_size() if device.type == "cuda" else 0) / 3600
+        rng_states = gather_objects(capture_rng(train_loader))
         checkpoint_state = {
+            "world_size": world_size(), "precision": precision, "rng_states": rng_states,
             "model_name": model_name,
             "run_name": run_name,
             "epoch": epoch,
             "model_state_dict": (
-                model.state_dict()
+                bare_model.state_dict()
             ),
             "optimizer_state_dict": (
                 optimizer.state_dict()
@@ -741,37 +782,45 @@ def fit_binary_change_model(
             ),
         }
 
-        _save_checkpoint(
-            checkpoint_path=(
-                run_directory
-                / "last.pt"
-            ),
-            checkpoint_state=checkpoint_state,
-        )
-
-        if (
-            epoch % checkpoint_interval == 0
-            or epoch == final_epoch
-        ):
-            _save_checkpoint(
-                checkpoint_path=(
-                    checkpoints_directory
-                    / (
-                        f"{model_name}_"
-                        f"epoch_{epoch:04d}.pt"
-                    )
-                ),
-                checkpoint_state=checkpoint_state,
-            )
-
-        if is_best_epoch:
+        def save_epoch(
+            checkpoint_state: dict[str, Any] = checkpoint_state,
+            epoch: int = epoch, is_best_epoch: bool = is_best_epoch,
+        ) -> None:
             _save_checkpoint(
                 checkpoint_path=(
                     run_directory
-                    / "best.pt"
+                    / "last.pt"
                 ),
                 checkpoint_state=checkpoint_state,
             )
+
+            if (
+                epoch % checkpoint_interval == 0
+                or epoch == final_epoch
+            ):
+                _save_checkpoint(
+                    checkpoint_path=(
+                        checkpoints_directory
+                        / (
+                            f"{model_name}_"
+                            f"epoch_{epoch:04d}.pt"
+                        )
+                    ),
+                    checkpoint_state=checkpoint_state,
+                )
+
+            if is_best_epoch:
+                _save_checkpoint(
+                    checkpoint_path=(
+                        run_directory
+                        / "best.pt"
+                    ),
+                    checkpoint_state=checkpoint_state,
+                )
+
+        on_rank_zero(save_epoch)
+        if rank() != 0:
+            continue
 
         print()
         print("=" * 80)

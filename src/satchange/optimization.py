@@ -1,15 +1,17 @@
 """Hyperparameter-search utilities."""
 
+import inspect
 import json
 import multiprocessing as mp
+import os
 import random
+import subprocess
 import time
 from concurrent.futures import (
     FIRST_COMPLETED,
     ProcessPoolExecutor,
     wait,
 )
-import os
 from copy import deepcopy
 from itertools import product
 from pathlib import Path
@@ -24,6 +26,7 @@ from satchange.data import (
 )
 from satchange.losses import BCEDiceLoss
 from satchange.models.factory import (
+    MODEL_REGISTRY,
     count_model_parameters,
     create_change_model,
 )
@@ -97,6 +100,12 @@ def _build_trial_parameters(
                 raise ValueError("model__ search parameters must name a model parameter.")
             nested_parameters[model_parameter_name] = parameters.pop(name)
 
+    if "model_parameters" in search_parameters:
+        raise ValueError("Use model__parameter candidates instead of replacing model_parameters.")
+    if "loss_weights" in search_parameters and any(
+        name in search_parameters for name in ("bce_weight", "dice_weight")
+    ):
+        raise ValueError("Do not combine loss_weights with separate searched loss weights.")
     for name, value in search_parameters.items():
         if name.startswith("model__"):
             model_parameter_name = name.removeprefix("model__")
@@ -265,6 +274,12 @@ def _run_single_trial(
         ],
     ).to(device)
 
+    parameters["code_revision"] = subprocess.run(
+        ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+    ).stdout.strip()
+    parameters["torch_version"] = str(torch.__version__)
+    parameters["cuda_version"] = torch.version.cuda
+    parameters["thresholds"] = list(thresholds)
     parameter_counts = count_model_parameters(model)
 
     loss_function = BCEDiceLoss(
@@ -322,6 +337,7 @@ def _run_single_trial(
             checkpoint_interval
         ),
         config=parameters,
+        precision=parameters.get("precision", "fp32"),
         resume_from=None,
         scheduler=scheduler,
         log_prefix=(
@@ -453,6 +469,15 @@ def run_parameter_search(
 ) -> list[dict[str, Any]]:
     """Run hyperparameter trials across multiple GPUs."""
 
+    if torch.distributed.is_initialized() or int(os.environ.get("WORLD_SIZE", "1")) > 1:
+        raise ValueError("Independent HPO cannot run inside torchrun/DDP.")
+    if len(set(gpu_ids)) != len(gpu_ids):
+        raise ValueError("gpu_ids must be unique.")
+    if fixed_parameters.get("execution_mode", "independent_hpo") == "ddp":
+        raise ValueError("HPO trials must be independent single-device runs.")
+    model_name = model_name.strip().lower()
+    if model_name not in MODEL_REGISTRY:
+        raise ValueError(f"Unknown model: {model_name}")
     search_trials = (
         _expand_search_space(
             search_space
@@ -469,6 +494,27 @@ def run_parameter_search(
             search_parameters=search_parameters,
         )
 
+        allowed_training = {
+            "model_parameters", "seed", "image_size", "batch_size", "num_workers",
+            "learning_rate", "weight_decay", "scheduler", "positive_weight",
+            "bce_weight", "dice_weight", "precision", "execution_mode",
+        }
+        unknown_training = parameters.keys() - allowed_training
+        if unknown_training:
+            raise ValueError(f"Unsupported trial parameters: {sorted(unknown_training)}")
+        if parameters.get("precision", "fp32") not in ("fp32", "bf16"):
+            raise ValueError("precision must be fp32 or bf16.")
+        supported = inspect.signature(MODEL_REGISTRY[model_name]).parameters
+        unknown = parameters["model_parameters"].keys() - supported.keys()
+        if unknown:
+            raise ValueError(f"Unsupported architecture parameters: {sorted(unknown)}")
+        parameters["execution_mode"] = "independent_hpo"
+        parameters["world_size"] = 1
+        parameters["precision"] = parameters.get("precision", "fp32")
+        if "encoder_depths" in parameters["model_parameters"]:
+            parameters["architecture_variant"] = (
+                "canonical_mit_b3" if tuple(parameters["model_parameters"]["encoder_depths"])
+                == (3, 4, 18, 3) else "depth_ablation")
         trial_space.append(
             (
                 trial_number,
@@ -485,10 +531,8 @@ def run_parameter_search(
         / search_name
     )
 
-    search_output_root.mkdir(
-        parents=True,
-        exist_ok=True,
-    )
+    if search_output_root.exists():
+        raise FileExistsError(f"Choose a new search_name; output exists: {search_output_root}")
 
     visible_gpu_count = (
         torch.cuda.device_count()
@@ -512,6 +556,8 @@ def run_parameter_search(
         raise ValueError(
             "At least one GPU ID is required."
         )
+
+    search_output_root.mkdir(parents=True, exist_ok=False)
 
     print(
         "Trials:",

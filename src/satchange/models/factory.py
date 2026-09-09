@@ -7,8 +7,10 @@ from torch import nn
 
 from satchange.models.bit import BIT
 from satchange.models.fc_siam_diff import FCSiamDiff
+from satchange.models.siam_mit_b3_diff import SiamMiTB3Diff
 
 MODEL_REGISTRY: dict[str, type[nn.Module]] = {
+    "siam_mit_b3_diff": SiamMiTB3Diff,
     "bit": BIT,
     "fc_siam_diff": FCSiamDiff,
 }
