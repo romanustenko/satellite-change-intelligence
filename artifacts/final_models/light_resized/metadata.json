@@ -1,0 +1,97 @@
+{
+  "model_level": "light",
+  "variant": "resized_256",
+  "model_name": "fc_siam_diff",
+  "image_size": 256,
+  "model_parameters": {
+    "in_channels": 3,
+    "out_channels": 1,
+    "base_channels": 16
+  },
+  "deployment_seed": 42,
+  "deployment_best_epoch": 104,
+  "deployment_threshold": 0.7,
+  "deployment_validation_f1": 0.7548480990666929,
+  "deployment_validation_iou": 0.6062297286788016,
+  "git_commit": "7f38560c7e845ee6478ae3adcdff9f0aa1d22253",
+  "seeds": {
+    "42": {
+      "trial": "trial_000",
+      "best_epoch": 104,
+      "validation_threshold": 0.7,
+      "validation_precision": 0.756902479980809,
+      "validation_recall": 0.7528048399466015,
+      "validation_f1": 0.7548480990666929,
+      "validation_iou": 0.6062297286788016,
+      "parameters": {
+        "learning_rate": 0.001,
+        "scheduler": "none",
+        "positive_weight": 10,
+        "bce_weight": 0.3,
+        "dice_weight": 0.7,
+        "weight_decay": 0.0001,
+        "batch_size": 16,
+        "image_size": 256,
+        "num_workers": 0,
+        "model_parameters": {
+          "in_channels": 3,
+          "out_channels": 1,
+          "base_channels": 16
+        },
+        "seed": 42
+      }
+    },
+    "123": {
+      "trial": "trial_001",
+      "best_epoch": 110,
+      "validation_threshold": 0.8,
+      "validation_precision": 0.7052063902681497,
+      "validation_recall": 0.7495214019939217,
+      "validation_f1": 0.7266889175286122,
+      "validation_iou": 0.5707080756088067,
+      "parameters": {
+        "learning_rate": 0.001,
+        "scheduler": "none",
+        "positive_weight": 10,
+        "bce_weight": 0.3,
+        "dice_weight": 0.7,
+        "weight_decay": 0.0001,
+        "batch_size": 16,
+        "image_size": 256,
+        "num_workers": 0,
+        "model_parameters": {
+          "in_channels": 3,
+          "out_channels": 1,
+          "base_channels": 16
+        },
+        "seed": 123
+      }
+    },
+    "777": {
+      "trial": "trial_002",
+      "best_epoch": 96,
+      "validation_threshold": 0.9,
+      "validation_precision": 0.7038054058484805,
+      "validation_recall": 0.7804129860539097,
+      "validation_f1": 0.7401321549116319,
+      "validation_iou": 0.5874680886547416,
+      "parameters": {
+        "learning_rate": 0.001,
+        "scheduler": "none",
+        "positive_weight": 10,
+        "bce_weight": 0.3,
+        "dice_weight": 0.7,
+        "weight_decay": 0.0001,
+        "batch_size": 16,
+        "image_size": 256,
+        "num_workers": 0,
+        "model_parameters": {
+          "in_channels": 3,
+          "out_channels": 1,
+          "base_channels": 16
+        },
+        "seed": 777
+      }
+    }
+  }
+}
