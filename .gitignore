@@ -52,20 +52,33 @@ data/*
 
 # ============================================================
 # Generated artifacts
+#
+# Everything is local EXCEPT finalized models.
 # ============================================================
 
 artifacts/*
 !artifacts/.gitkeep
 
+!artifacts/final_models/
+!artifacts/final_models/**
+
 
 # ============================================================
 # Model files
+#
+# Ignore model files globally, but allow finalized model
+# checkpoints under artifacts/final_models/.
 # ============================================================
 
 *.pt
 *.pth
 *.ckpt
 *.onnx
+
+!artifacts/final_models/**/*.pt
+!artifacts/final_models/**/*.pth
+!artifacts/final_models/**/*.ckpt
+!artifacts/final_models/**/*.onnx
 
 
 # ============================================================

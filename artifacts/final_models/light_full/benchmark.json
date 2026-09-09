@@ -1,0 +1,9 @@
+{
+  "parameters": 7760097,
+  "trainable_parameters": 7760097,
+  "checkpoint_mb": 88.8835039138794,
+  "weights_only_mb": 29.62001895904541,
+  "peak_inference_vram_mb": 1565.67724609375,
+  "latency_ms_per_pair": 94.09114331007004,
+  "pairs_per_second": 10.627992867560105
+}
