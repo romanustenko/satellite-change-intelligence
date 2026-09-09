@@ -1,0 +1,41 @@
+{
+  "model__decoder_channels": [
+    64,
+    128
+  ],
+  "model__drop_path_rate": [
+    0.0,
+    0.1
+  ],
+  "learning_rate": [
+    0.0001,
+    0.0003
+  ],
+  "loss_weights": [
+    [
+      0.3,
+      0.7
+    ],
+    [
+      0.5,
+      0.5
+    ]
+  ],
+  "seed": [
+    42
+  ],
+  "model__encoder_depths": [
+    [
+      3,
+      4,
+      6,
+      3
+    ],
+    [
+      3,
+      4,
+      18,
+      3
+    ]
+  ]
+}
