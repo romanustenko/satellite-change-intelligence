@@ -1,0 +1,51 @@
+project:
+  name: satellite-change-intelligence
+  seed: 42
+
+runtime:
+  device: auto
+
+model:
+  name: bit
+  parameters:
+    in_channels: 3
+    out_channels: 1
+    embedding_dim: 32
+    token_length: 4
+    num_heads: 8
+    encoder_head_dim: 64
+    decoder_head_dim: 64
+    encoder_depth: 1
+    decoder_depth: 8
+    dropout: 0.0
+    pretrained_backbone: false
+
+data:
+  image_size: 256
+  batch_size: 32
+  num_workers: 6
+
+training:
+  epochs: 100
+  # Provisional until a BIT-specific learning-rate search is completed.
+  learning_rate: 0.0001
+  weight_decay: 0.0001
+
+  loss:
+    bce_weight: 0.3
+    dice_weight: 0.7
+    pos_weight: 10
+
+  threshold: 0.5
+
+output:
+  directory: artifacts/bit
+  checkpoint_name: best.pt
+
+dataset:
+  name: levir_cd
+
+  download_url: "https://drive.google.com/drive/folders/1dLuzldMRmbBNKPpUkX8Z53hi6NHLrWim"
+
+  download_directory: data/downloads/levir_cd
+  prepared_directory: data/LEVIR-CD

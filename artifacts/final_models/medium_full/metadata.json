@@ -1,0 +1,66 @@
+{
+  "model_level": "medium",
+  "variant": "full_resolution",
+  "model_name": "bit",
+  "image_size": 1024,
+  "model_parameters": {
+    "in_channels": 3,
+    "out_channels": 1,
+    "embedding_dim": 64,
+    "token_length": 4,
+    "num_heads": 8,
+    "encoder_head_dim": 64,
+    "decoder_head_dim": 64,
+    "encoder_depth": 1,
+    "decoder_depth": 8,
+    "dropout": 0.0,
+    "pretrained_backbone": false
+  },
+  "training_parameters": {
+    "learning_rate": 0.0003,
+    "weight_decay": 0.0001,
+    "scheduler": "none",
+    "positive_weight": 10,
+    "bce_weight": 0.3,
+    "dice_weight": 0.7,
+    "batch_size": 4,
+    "image_size": 1024,
+    "precision": "fp32",
+    "epochs": 100
+  },
+  "deployment_seed": 123,
+  "deployment_threshold": 0.7,
+  "deployment_best_epoch": 100,
+  "deployment_selection": "highest saved validation F1; not test F1",
+  "evaluation_batch_size": 4,
+  "num_workers": 0,
+  "std_ddof": 1,
+  "evaluation_function": "satchange.training.evaluate_thresholds",
+  "seeds": {
+    "42": {
+      "trial": "trial_000",
+      "best_epoch": 81,
+      "validation_threshold": 0.5,
+      "validation_f1": 0.8602307938351904,
+      "validation_iou": 0.7547412135565293,
+      "source_checkpoint": "artifacts/hyperparameter_search/bit_medium_full_final_100ep_seed42_rerun_v1/bit/trial_000/best.pt"
+    },
+    "123": {
+      "trial": "trial_001",
+      "best_epoch": 100,
+      "validation_threshold": 0.7,
+      "validation_f1": 0.8609420057101751,
+      "validation_iou": 0.7558368494195519,
+      "source_checkpoint": "artifacts/hyperparameter_search/bit_medium_full_final_100ep_seeds42_123_777_v1/bit/trial_001/best.pt"
+    },
+    "777": {
+      "trial": "trial_002",
+      "best_epoch": 82,
+      "validation_threshold": 0.45,
+      "validation_f1": 0.8487859496476419,
+      "validation_iou": 0.7372963780174933,
+      "source_checkpoint": "artifacts/hyperparameter_search/bit_medium_full_final_100ep_seeds42_123_777_v1/bit/trial_002/best.pt"
+    }
+  },
+  "evaluation_complete": true
+}
