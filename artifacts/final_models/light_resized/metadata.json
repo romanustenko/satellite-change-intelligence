@@ -19,10 +19,10 @@
       "trial": "trial_000",
       "best_epoch": 104,
       "validation_threshold": 0.7,
-      "validation_precision": 0.756902479980809,
-      "validation_recall": 0.7528048399466015,
       "validation_f1": 0.7548480990666929,
       "validation_iou": 0.6062297286788016,
+      "validation_precision": 0.756902479980809,
+      "validation_recall": 0.7528048399466015,
       "parameters": {
         "learning_rate": 0.001,
         "scheduler": "none",
@@ -39,16 +39,17 @@
           "base_channels": 16
         },
         "seed": 42
-      }
+      },
+      "source_checkpoint": "artifacts/final_models/light_resized/seed_42_best.pt"
     },
     "123": {
       "trial": "trial_001",
       "best_epoch": 110,
       "validation_threshold": 0.8,
-      "validation_precision": 0.7052063902681497,
-      "validation_recall": 0.7495214019939217,
       "validation_f1": 0.7266889175286122,
       "validation_iou": 0.5707080756088067,
+      "validation_precision": 0.7052063902681497,
+      "validation_recall": 0.7495214019939217,
       "parameters": {
         "learning_rate": 0.001,
         "scheduler": "none",
@@ -65,16 +66,17 @@
           "base_channels": 16
         },
         "seed": 123
-      }
+      },
+      "source_checkpoint": "artifacts/final_models/light_resized/seed_123_best.pt"
     },
     "777": {
       "trial": "trial_002",
       "best_epoch": 96,
       "validation_threshold": 0.9,
-      "validation_precision": 0.7038054058484805,
-      "validation_recall": 0.7804129860539097,
       "validation_f1": 0.7401321549116319,
       "validation_iou": 0.5874680886547416,
+      "validation_precision": 0.7038054058484805,
+      "validation_recall": 0.7804129860539097,
       "parameters": {
         "learning_rate": 0.001,
         "scheduler": "none",
@@ -91,7 +93,19 @@
           "base_channels": 16
         },
         "seed": 777
-      }
+      },
+      "source_checkpoint": "artifacts/final_models/light_resized/seed_777_best.pt"
     }
-  }
+  },
+  "deployment_selection": "highest saved validation F1; never test F1",
+  "source_results": "artifacts/final_models/light_resized/training_results.json",
+  "checkpoint_sha256": {
+    "42": "a4becfc385ad7382159cfce9259de2738d549d0161cb8b42f79c247318f0aa6a",
+    "123": "6e8db6e51a08f1aaaeac4a0cddd9d51f4c0a3fc22cdcff20829544187b538f02",
+    "777": "e4a8dbec3eb6dc89527688b7bce94db938f7ff01e09ce22f87ec070ff1a22793"
+  },
+  "dataset_root": "/home/ustenkoroma0-40gmail-2ecom/projects/satellite-change-intelligence/data/LEVIR-CD",
+  "evaluation_complete": true,
+  "evaluated_at_utc": "2026-09-28T06:11:37.779411+00:00",
+  "evaluation_function": "satchange.training.evaluate_thresholds"
 }

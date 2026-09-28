@@ -1,0 +1,71 @@
+{
+  "model": "bit",
+  "variant": "medium_full",
+  "image_size": 1024,
+  "seeds": [
+    42,
+    123,
+    777
+  ],
+  "std_type": "sample",
+  "std_ddof": 1,
+  "number_of_pairs": 64,
+  "evaluation_batch_size": 4,
+  "results": [
+    {
+      "trial": "trial_000",
+      "seed": 42,
+      "best_validation_epoch": 81,
+      "validation_threshold": 0.5,
+      "original_validation_f1": 0.8602307938351904,
+      "original_validation_iou": 0.7547412135565293,
+      "validation_loss": 0.2636293168179691,
+      "validation_precision": 0.8590801080809262,
+      "validation_recall": 0.8613807350720883,
+      "validation_f1": 0.8602288833594145,
+      "validation_iou": 0.7547382722725009,
+      "validation_accuracy": 0.988253116607666
+    },
+    {
+      "trial": "trial_001",
+      "seed": 123,
+      "best_validation_epoch": 100,
+      "validation_threshold": 0.7,
+      "original_validation_f1": 0.8609420057101751,
+      "original_validation_iou": 0.7558368494195519,
+      "validation_loss": 0.2482872987166047,
+      "validation_precision": 0.8658285033002233,
+      "validation_recall": 0.8561109951183623,
+      "validation_f1": 0.8609423295568163,
+      "validation_iou": 0.7558373486233068,
+      "validation_accuracy": 0.9883942008018494
+    },
+    {
+      "trial": "trial_002",
+      "seed": 777,
+      "best_validation_epoch": 82,
+      "validation_threshold": 0.45,
+      "original_validation_f1": 0.8487859496476419,
+      "original_validation_iou": 0.7372963780174933,
+      "validation_loss": 0.28014849219471216,
+      "validation_precision": 0.8519027740867768,
+      "validation_recall": 0.8457231343039796,
+      "validation_f1": 0.8488017067386634,
+      "validation_iou": 0.7373201573588284,
+      "validation_accuracy": 0.9873557537794113
+    }
+  ],
+  "validation_loss_mean": 0.26402170257642865,
+  "validation_loss_std": 0.015934220639865968,
+  "validation_precision_mean": 0.8589371284893088,
+  "validation_precision_std": 0.006963965530089411,
+  "validation_recall_mean": 0.8544049548314767,
+  "validation_recall_std": 0.007966997273046303,
+  "validation_f1_mean": 0.8566576398849647,
+  "validation_f1_std": 0.006812783246846594,
+  "validation_iou_mean": 0.7492985927515453,
+  "validation_iou_std": 0.0103881749142641,
+  "validation_accuracy_mean": 0.9880010237296423,
+  "validation_accuracy_std": 0.0005632549768669143,
+  "threshold_selection": "saved validation threshold; no test tuning"
+}

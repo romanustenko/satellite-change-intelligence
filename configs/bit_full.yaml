@@ -21,9 +21,9 @@ model:
     pretrained_backbone: false
 
 data:
-  image_size: 256
-  batch_size: 1
-  num_workers: 0
+  image_size: 1024
+  batch_size: 12
+  num_workers: 6
 
 training:
   epochs: 100
