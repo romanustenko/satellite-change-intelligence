@@ -1,6 +1,12 @@
-﻿"""Reusable model training and validation pipeline."""
+"""Reusable model training and validation pipeline."""
 
+import math
+import os
+import pickle
+import warnings
+from uuid import uuid4
 import time
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -22,24 +28,242 @@ from satchange.execution import (
 from satchange.metrics import BinaryChangeMetrics
 
 
-def _save_checkpoint(
-    checkpoint_path: Path,
-    checkpoint_state: dict[str, Any],
-) -> None:
-    """Save one training checkpoint."""
+@dataclass
+class EarlyStopping:
+    """Track significant validation-F1 improvements, independently of best.pt.
 
+    A gain must exceed min_delta relative to the last significant best score.
+    Small gains therefore accumulate. Patience is counted from the first epoch;
+    min_epochs only prevents stopping too early. None disables early stopping.
+    """
+
+    patience: int | None = None
+    min_epochs: int = 1
+    min_delta: float = 0.0
+    best_score: float | None = field(default=None, init=False)
+    bad_epochs: int = field(default=0, init=False)
+    last_epoch: int = field(default=0, init=False)
+
+    def __post_init__(self) -> None:
+        if self.patience is not None and (
+            type(self.patience) is not int or self.patience < 1
+        ):
+            raise ValueError("patience must be None or a positive integer.")
+        if type(self.min_epochs) is not int or self.min_epochs < 1:
+            raise ValueError("min_epochs must be a positive integer.")
+        if (
+            isinstance(self.min_delta, bool)
+            or not isinstance(self.min_delta, (int, float))
+            or not math.isfinite(self.min_delta)
+            or self.min_delta < 0
+        ):
+            raise ValueError("min_delta must be a finite, nonnegative number.")
+        self.min_delta = float(self.min_delta)
+
+    @property
+    def policy(self) -> dict[str, Any] | None:
+        """Canonical metadata used by checkpoints, HPO manifests, and cache keys."""
+        if self.patience is None:
+            return None
+        return {
+            "monitor": "validation_f1",
+            "patience": self.patience,
+            "min_epochs": self.min_epochs,
+            "min_delta": self.min_delta,
+        }
+
+    def validate_budget(self, maximum_epoch: int) -> None:
+        if type(maximum_epoch) is not int or maximum_epoch < 1:
+            raise ValueError("The epoch budget must be a positive integer.")
+        if self.patience is not None and self.min_epochs > maximum_epoch:
+            raise ValueError("min_epochs cannot exceed the maximum epoch budget.")
+
+    @property
+    def should_stop(self) -> bool:
+        return (
+            self.patience is not None
+            and self.last_epoch >= self.min_epochs
+            and self.bad_epochs >= self.patience
+        )
+
+    def step(self, score: float, epoch: int) -> bool:
+        self.last_epoch = epoch
+        if self.patience is None:
+            return False
+        if not math.isfinite(score):
+            raise ValueError("Early stopping requires a finite validation F1.")
+        if self.best_score is None or score > self.best_score + self.min_delta:
+            self.best_score = float(score)
+            self.bad_epochs = 0
+        else:
+            self.bad_epochs += 1
+        return self.should_stop
+
+    def state_dict(self) -> dict[str, Any]:
+        return {
+            "policy": self.policy,
+            "best_score": self.best_score,
+            "bad_epochs": self.bad_epochs,
+            "last_epoch": self.last_epoch,
+        }
+
+    def load_state_dict(self, state: dict[str, Any] | None, saved_epoch: int) -> None:
+        """Restore the same stopping policy; do not silently reset patience."""
+        if state is None:
+            if self.patience is not None:
+                raise ValueError(
+                    "Checkpoint has no early-stopping state. Start a new run "
+                    "instead of enabling patience during an exact resume."
+                )
+            self.last_epoch = saved_epoch
+            return
+        if state.get("policy") != self.policy:
+            raise ValueError("Resume early-stopping policy differs from checkpoint.")
+        bad_epochs = state.get("bad_epochs")
+        best_score = state.get("best_score")
+        if (
+            state.get("last_epoch") != saved_epoch
+            or type(bad_epochs) is not int
+            or not 0 <= bad_epochs <= saved_epoch
+            or (self.patience is not None and best_score is None)
+            or (best_score is not None and (
+                isinstance(best_score, bool)
+                or not isinstance(best_score, (int, float))
+                or not math.isfinite(best_score)
+                or not 0 <= best_score <= 1
+            ))
+        ):
+            raise ValueError("Invalid early-stopping checkpoint state.")
+        self.best_score = best_score
+        self.bad_epochs = bad_epochs
+        self.last_epoch = saved_epoch
+
+
+def _save_checkpoint(checkpoint_path: Path, checkpoint_state: dict[str, Any]) -> None:
+    """Commit a checkpoint atomically; a failed write leaves the previous file intact."""
     if rank() != 0:
         return
+    checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = checkpoint_path.with_name(f".{checkpoint_path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("wb") as file:
+            torch.save(checkpoint_state, file)
+            file.flush()
+            os.fsync(file.fileno())
+        os.replace(temporary, checkpoint_path)
+    finally:
+        temporary.unlink(missing_ok=True)
 
-    checkpoint_path.parent.mkdir(
-        parents=True,
-        exist_ok=True,
+
+def load_training_checkpoint(path: str | Path) -> dict[str, Any]:
+    """Load a locally produced full checkpoint on CPU, not into scarce GPU memory.
+
+    This includes Python/NumPy RNG state and therefore uses weights_only=False.
+    Only supply checkpoints from your own training or another trusted source.
+    Inference-only exports are intentionally not accepted as resumable state.
+    """
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    required = {"epoch", "model_state_dict", "optimizer_state_dict"}
+    if not isinstance(state, dict) or required - state.keys():
+        raise ValueError(f"Not a complete training checkpoint: {path}")
+    if type(state["epoch"]) is not int or state["epoch"] < 1:
+        raise ValueError(f"Invalid checkpoint epoch: {path}")
+    return state
+
+
+def find_training_checkpoint(directory: str | Path) -> tuple[Path, int] | None:
+    """Prefer committed last.pt; fall back to numbered epoch files if it is corrupt.
+
+    Never silently restart from zero when checkpoint files exist but none load.
+    Orphaned temporary files from an interrupted write are not candidates.
+    """
+    directory = Path(directory)
+    candidates = [directory / "last.pt"] + sorted(
+        (directory / "checkpoints").glob("*_epoch_*.pt"), reverse=True
+    )
+    existing = [path for path in candidates if path.is_file()]
+    for path in existing:
+        try:
+            state = load_training_checkpoint(path)
+        except (OSError, EOFError, RuntimeError, ValueError, KeyError, pickle.UnpicklingError) as error:
+            warnings.warn(f"Cannot resume {path}: {error}", RuntimeWarning)
+            continue
+        return path, state["epoch"]
+    if existing:
+        raise RuntimeError(f"No readable training checkpoint in {directory}; files were preserved.")
+    return None
+
+
+def _checkpoint_run_directory(path: Path) -> Path:
+    return path.parent.parent if path.parent.name == "checkpoints" else path.parent
+
+
+def _best_weights(state: dict[str, Any], source: Path) -> dict[str, torch.Tensor]:
+    """Recover the best weights at/before this snapshot, never later weights."""
+    best_epoch = state["best_metrics"]["epoch"]
+    if best_epoch == state["epoch"]:
+        return state["model_state_dict"]
+    if state.get("best_model_state_dict") is not None:
+        return state["best_model_state_dict"]
+    # Compatibility with older checkpoints, which depend on a matching best file.
+    root = _checkpoint_run_directory(source)
+    candidates = [root / "best.pt", root / "checkpoints" /
+                  f"{state['model_name']}_epoch_{best_epoch:04d}.pt"]
+    for path in candidates:
+        if not path.is_file():
+            continue
+        best = torch.load(path, map_location="cpu", weights_only=False)
+        if (best.get("epoch") == best_epoch and best.get("model_name") == state.get("model_name")
+                and best.get("config") == state.get("config")):
+            return best["model_state_dict"]
+    raise ValueError(
+        f"Checkpoint {source} needs best weights from epoch {best_epoch}, which were not found. "
+        "Use another full snapshot; do not substitute weights from a later epoch."
     )
 
-    torch.save(
-        checkpoint_state,
-        checkpoint_path,
-    )
+
+def restore_best_checkpoint(state: dict[str, Any], source: Path, destination: Path) -> None:
+    """Restore selection weights alongside a resumed run, including an explicit rollback.
+
+    If the historical full best snapshot is unavailable, best.pt is a labelled
+    inference-only export. last.pt and numbered checkpoints remain full snapshots.
+    """
+    weights = _best_weights(state, source)
+    best_epoch = state["best_metrics"]["epoch"]
+    if best_epoch == state["epoch"]:
+        best_state = dict(state)
+    else:
+        best_state = {
+            "checkpoint_kind": "selection_weights", "epoch": best_epoch,
+            "model_name": state["model_name"], "run_name": state["run_name"],
+            "model_state_dict": weights, "best_metrics": state["best_metrics"],
+            "current_metrics": state["best_metrics"], "config": state.get("config"),
+            "precision": state.get("precision", "fp32"), "world_size": state.get("world_size", 1),
+            "resumed_from": str(source),
+        }
+    if best_epoch != state["epoch"]:
+        # Keep the existing full best snapshot when it corresponds to this prefix.
+        original = _checkpoint_run_directory(source) / "best.pt"
+        if original.is_file():
+            try:
+                candidate = load_training_checkpoint(original)
+            except (OSError, EOFError, RuntimeError, ValueError, pickle.UnpicklingError):
+                candidate = None
+            if (candidate is not None and candidate["epoch"] == best_epoch
+                    and candidate.get("model_name") == state.get("model_name")
+                    and candidate.get("best_metrics", {}).get("validation_f1")
+                        == state["best_metrics"]["validation_f1"]
+                    and candidate["model_state_dict"].keys() == weights.keys()
+                    and all(torch.equal(candidate["model_state_dict"][key].cpu(), tensor.cpu())
+                            for key, tensor in weights.items())):
+                best_state = dict(candidate, run_name=state["run_name"], config=state.get("config"))
+    _save_checkpoint(destination, best_state)
+
+
+def _copy_weights_to_cpu(model: nn.Module) -> dict[str, torch.Tensor]:
+    """Keep one independent historical best on CPU, never a second model on GPU."""
+    return {name: tensor.detach().to("cpu", copy=True)
+            for name, tensor in model.state_dict().items()}
 
 
 def train_one_epoch(
@@ -334,8 +558,21 @@ def fit_binary_change_model(
     scheduler: Any | None = None,
     log_prefix: str = "",
     precision: str = "fp32",
+    *,
+    patience: int | None = None,
+    min_epochs: int = 1,
+    min_delta: float = 0.0,
 ) -> list[dict[str, Any]]:
-    """Train or resume a binary change-detection model."""
+    """Train or resume, optionally stopping after patience epochs without F1 gain.
+
+    From scratch, number_of_epochs is a maximum. On explicit checkpoint resume,
+    it retains its existing meaning: the maximum number of additional epochs.
+    min_epochs refers to the absolute epoch number. Every F1 maximum still saves
+    best.pt, even when its gain is smaller than the stopping min_delta.
+    """
+    early_stopping = EarlyStopping(patience, min_epochs, min_delta)
+    if resume_from is None:
+        early_stopping.validate_budget(number_of_epochs)
 
     if (
         not isinstance(number_of_epochs, int)
@@ -402,6 +639,7 @@ def fit_binary_change_model(
     ] | None = None
 
     best_f1 = -1.0
+    best_weights: dict[str, torch.Tensor] | None = None
 
     if resume_from is not None:
         resume_path = Path(
@@ -414,11 +652,7 @@ def fit_binary_change_model(
                 f"{resume_path}"
             )
 
-        checkpoint = torch.load(
-            resume_path,
-            map_location=device,
-            weights_only=False,
-        )
+        checkpoint = load_training_checkpoint(resume_path)
 
         required_keys = {
             "epoch",
@@ -534,6 +768,14 @@ def fit_binary_change_model(
                 best_metrics["validation_f1"]
             )
 
+        early_stopping.load_state_dict(checkpoint.get("early_stopping"), saved_epoch)
+        best_weights = _best_weights(checkpoint, resume_path)
+        on_rank_zero(lambda: restore_best_checkpoint(
+            checkpoint, resume_path, run_directory / "best.pt"
+        ))
+        # Discard loaded optimizer tensors on CPU after loading into the optimizer.
+        del checkpoint
+
         print(
             "Resumed from checkpoint:",
             resume_path,
@@ -554,6 +796,11 @@ def fit_binary_change_model(
         + number_of_epochs
         - 1
     )
+
+    early_stopping.validate_budget(final_epoch)
+    if early_stopping.should_stop:
+        # An already early-stopped checkpoint is a completed run, not a restart.
+        return metric_history
 
     for epoch in range(
         start_epoch,
@@ -733,11 +980,21 @@ def fit_binary_change_model(
             epoch_metrics["validation_f1"]
         )
 
+        should_stop = early_stopping.step(current_f1, epoch)
+        stop_reason = (
+            "early_stopping" if should_stop and epoch < final_epoch
+            else "max_epochs" if epoch == final_epoch
+            else None
+        )
+        epoch_metrics["early_stopping_bad_epochs"] = early_stopping.bad_epochs
+        epoch_metrics["stop_reason"] = stop_reason
+
         is_best_epoch = (
             current_f1 > best_f1
         )
 
         if is_best_epoch:
+            best_weights = _copy_weights_to_cpu(bare_model)
             best_f1 = current_f1
             best_metrics = dict(
                 epoch_metrics
@@ -755,6 +1012,11 @@ def fit_binary_change_model(
             world_size() if device.type == "cuda" else 0) / 3600
         rng_states = gather_objects(capture_rng(train_loader))
         checkpoint_state = {
+            "checkpoint_schema_version": 2,
+            "thresholds": list(thresholds),
+            "best_model_state_dict": best_weights,
+            "early_stopping": early_stopping.state_dict(),
+            "stop_reason": stop_reason,
             "world_size": world_size(), "precision": precision, "rng_states": rng_states,
             "model_name": model_name,
             "run_name": run_name,
@@ -785,18 +1047,12 @@ def fit_binary_change_model(
         def save_epoch(
             checkpoint_state: dict[str, Any] = checkpoint_state,
             epoch: int = epoch, is_best_epoch: bool = is_best_epoch,
+            should_stop: bool = should_stop,
         ) -> None:
-            _save_checkpoint(
-                checkpoint_path=(
-                    run_directory
-                    / "last.pt"
-                ),
-                checkpoint_state=checkpoint_state,
-            )
-
             if (
                 epoch % checkpoint_interval == 0
                 or epoch == final_epoch
+                or should_stop
             ):
                 _save_checkpoint(
                     checkpoint_path=(
@@ -818,8 +1074,12 @@ def fit_binary_change_model(
                     checkpoint_state=checkpoint_state,
                 )
 
+            _save_checkpoint(run_directory / "last.pt", checkpoint_state)
+
         on_rank_zero(save_epoch)
         if rank() != 0:
+            if should_stop:
+                break
             continue
 
         print()
@@ -863,5 +1123,15 @@ def fit_binary_change_model(
             f"IoU:              "
             f"{best_threshold_result['iou']:.6f}"
         )
+
+        if should_stop:
+            if stop_reason == "early_stopping":
+                print(
+                    f"{log_prefix}Early stopping at epoch {epoch}: "
+                    f"{early_stopping.bad_epochs} epochs without validation F1 "
+                    f"gain > {early_stopping.min_delta:g}. "
+                    f"Best checkpoint: epoch {best_metrics['epoch']}, F1={best_f1:.6f}."
+                )
+            break
 
     return metric_history

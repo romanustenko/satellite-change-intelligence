@@ -10,25 +10,164 @@
   "git_commit": "7f38560c7e845ee6478ae3adcdff9f0aa1d22253",
   "seeds": {
     "123": {
+      "seed": 123,
       "trial": "trial_000",
-      "best_epoch": 109,
+      "best_validation_epoch": 109,
       "validation_threshold": 0.7,
-      "validation_f1": 0.8234926363050075,
-      "validation_iou": 0.6999468611218115
+      "evaluation_batch_size": 16,
+      "source_checkpoint": "artifacts/final_models/light_full/seed_123_best.pt",
+      "original_validation_f1": 0.8234926363050075,
+      "original_validation_iou": 0.6999468611218115,
+      "validation_loss": 0.2892755791544914,
+      "validation_precision": 0.8173556583884586,
+      "validation_recall": 0.8296969606585737,
+      "validation_f1": 0.823480073070606,
+      "validation_iou": 0.6999287085768374,
+      "validation_accuracy": 0.98507259786129,
+      "validation_tp": 2336649,
+      "validation_fp": 522142,
+      "validation_fn": 479619,
+      "validation_tn": 63770454,
+      "validation_f1_delta": -1.2563234401463674e-05,
+      "validation_iou_delta": -1.815254497405938e-05,
+      "historical_difference_warning": false,
+      "best_epoch": 109,
+      "parameters": {
+        "learning_rate": 0.0014,
+        "scheduler": "none",
+        "positive_weight": 10,
+        "bce_weight": 0.3,
+        "dice_weight": 0.7,
+        "weight_decay": 0.0001,
+        "batch_size": 16,
+        "image_size": null,
+        "num_workers": 0,
+        "model_parameters": {
+          "in_channels": 3,
+          "out_channels": 1,
+          "base_channels": 32
+        },
+        "seed": 123
+      }
     },
     "777": {
+      "seed": 777,
       "trial": "trial_001",
-      "best_epoch": 43,
+      "best_validation_epoch": 43,
       "validation_threshold": 0.45,
-      "validation_f1": 0.7695311508857334,
-      "validation_iou": 0.6253966944711101
+      "evaluation_batch_size": 16,
+      "source_checkpoint": "artifacts/final_models/light_full/seed_777_best.pt",
+      "original_validation_f1": 0.7695311508857334,
+      "original_validation_iou": 0.6253966944711101,
+      "validation_loss": 0.43086670339107513,
+      "validation_precision": 0.7801527569892599,
+      "validation_recall": 0.7591809444271639,
+      "validation_f1": 0.7695239911964196,
+      "validation_iou": 0.6253872368829402,
+      "validation_accuracy": 0.9809158444404602,
+      "validation_tp": 2138057,
+      "validation_fp": 602505,
+      "validation_fn": 678211,
+      "validation_tn": 63690091,
+      "validation_f1_delta": -7.159689313862572e-06,
+      "validation_iou_delta": -9.457588169947684e-06,
+      "historical_difference_warning": false,
+      "best_epoch": 43,
+      "parameters": {
+        "learning_rate": 0.0014,
+        "scheduler": "none",
+        "positive_weight": 10,
+        "bce_weight": 0.3,
+        "dice_weight": 0.7,
+        "weight_decay": 0.0001,
+        "batch_size": 16,
+        "image_size": null,
+        "num_workers": 0,
+        "model_parameters": {
+          "in_channels": 3,
+          "out_channels": 1,
+          "base_channels": 32
+        },
+        "seed": 777
+      }
     },
     "2024": {
+      "seed": 2024,
       "trial": "trial_002",
-      "best_epoch": 110,
+      "best_validation_epoch": 110,
       "validation_threshold": 0.8,
-      "validation_f1": 0.850919534532662,
-      "validation_iou": 0.7405221480173609
+      "evaluation_batch_size": 16,
+      "source_checkpoint": "artifacts/final_models/light_full/seed_2024_best.pt",
+      "original_validation_f1": 0.850919534532662,
+      "original_validation_iou": 0.7405221480173609,
+      "validation_loss": 0.2574513554573059,
+      "validation_precision": 0.8454667055517855,
+      "validation_recall": 0.8564483209694532,
+      "validation_f1": 0.8509220837957805,
+      "validation_iou": 0.7405260094168851,
+      "validation_accuracy": 0.9874064326286316,
+      "validation_tp": 2411988,
+      "validation_fp": 440860,
+      "validation_fn": 404280,
+      "validation_tn": 63851736,
+      "validation_f1_delta": 2.5492631184897974e-06,
+      "validation_iou_delta": 3.861399524129894e-06,
+      "historical_difference_warning": false,
+      "best_epoch": 110,
+      "parameters": {
+        "learning_rate": 0.0014,
+        "scheduler": "none",
+        "positive_weight": 10,
+        "bce_weight": 0.3,
+        "dice_weight": 0.7,
+        "weight_decay": 0.0001,
+        "batch_size": 16,
+        "image_size": null,
+        "num_workers": 0,
+        "model_parameters": {
+          "in_channels": 3,
+          "out_channels": 1,
+          "base_channels": 32
+        },
+        "seed": 2024
+      }
     }
-  }
+  },
+  "native_resolution": [
+    1024,
+    1024
+  ],
+  "model_parameters": {
+    "in_channels": 3,
+    "out_channels": 1,
+    "base_channels": 32
+  },
+  "deployment_validation_f1": 0.8509220837957805,
+  "deployment_validation_iou": 0.7405260094168851,
+  "deployment_original_validation_f1": 0.850919534532662,
+  "deployment_original_validation_iou": 0.7405221480173609,
+  "evaluation_function": "satchange.training.evaluate_thresholds",
+  "deployment_selection": "highest ORIGINAL validation F1; not test F1",
+  "source_results": "artifacts/training_runs/fc_siam_diff_full_candidate_c_final_multiseed_deterministic/results.json",
+  "checkpoint_sha256": {
+    "123": "b8312630436f35dca810089c775c99cef5e2ca5ea2315a5d6edc9701515ce10c",
+    "777": "94b784644fd14e7da2d3af70b1490224383e90c661dd9d1407b468db7c40453b",
+    "2024": "12fd0449554cdbddb04258dd0f312a3479768d23fd51d83ca55c9429f13f306c"
+  },
+  "dataset_root": "/home/ustenkoroma0-40gmail-2ecom/projects/satellite-change-intelligence/data/LEVIR-CD",
+  "evaluation_complete": true,
+  "evaluation_protocol": {
+    "precision": "fp32",
+    "tf32_matmul": false,
+    "tf32_cudnn": false,
+    "cudnn_benchmark": false,
+    "cudnn_deterministic": true,
+    "deterministic_algorithms": false,
+    "device": "cuda:0",
+    "torch_version": "2.12.1+cu130",
+    "cuda_version": "13.0",
+    "cudnn_version": 92000,
+    "gpu_name": "NVIDIA A100-SXM4-80GB"
+  },
+  "evaluated_at_utc": "2026-09-28T07:21:30.205479+00:00"
 }
