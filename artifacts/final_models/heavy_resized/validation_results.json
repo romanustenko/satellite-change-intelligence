@@ -1,0 +1,50 @@
+{
+  "model": "siam_mit_b3_diff",
+  "variant": "heavy_resized",
+  "image_size": 256,
+  "seeds": [
+    42
+  ],
+  "std_type": "sample",
+  "std_ddof": 1,
+  "number_of_pairs": 64,
+  "evaluation_batch_size": 1,
+  "results": [
+    {
+      "trial": "trial_007",
+      "seed": 42,
+      "best_validation_epoch": 59,
+      "validation_threshold": 0.85,
+      "original_validation_f1": 0.7755862537285373,
+      "original_validation_iou": 0.6334347814130006,
+      "validation_loss": 0.2877544520679294,
+      "validation_precision": 0.7660508019168444,
+      "validation_recall": 0.7855028829494135,
+      "validation_f1": 0.775654905480451,
+      "validation_iou": 0.6335263717333138,
+      "validation_accuracy": 0.9809293746948242,
+      "validation_tp": 138276,
+      "validation_fp": 42229,
+      "validation_fn": 37759,
+      "validation_tn": 3976040,
+      "threshold_source": "saved_validation",
+      "validation_f1_delta": 6.865175191372863e-05,
+      "validation_iou_delta": 9.159032031325065e-05
+    }
+  ],
+  "precision": "fp32",
+  "metric_aggregation": "global pixel confusion counts within each seed; mean across seeds",
+  "threshold_selection": "saved or explicitly supplied validation threshold; no test tuning",
+  "validation_loss_mean": 0.2877544520679294,
+  "validation_loss_std": null,
+  "validation_precision_mean": 0.7660508019168444,
+  "validation_precision_std": null,
+  "validation_recall_mean": 0.7855028829494135,
+  "validation_recall_std": null,
+  "validation_f1_mean": 0.775654905480451,
+  "validation_f1_std": null,
+  "validation_iou_mean": 0.6335263717333138,
+  "validation_iou_std": null,
+  "validation_accuracy_mean": 0.9809293746948242,
+  "validation_accuracy_std": null
+}
