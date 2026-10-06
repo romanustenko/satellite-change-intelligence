@@ -140,16 +140,19 @@ class EarlyStopping:
 
 
 def _save_checkpoint(checkpoint_path: Path, checkpoint_state: dict[str, Any]) -> None:
-    """Commit a checkpoint atomically; a failed write leaves the previous file intact."""
+    """Commit one checkpoint atomically; an interrupted write keeps the old file."""
+    import os
+    from uuid import uuid4
+
     if rank() != 0:
         return
     checkpoint_path.parent.mkdir(parents=True, exist_ok=True)
     temporary = checkpoint_path.with_name(f".{checkpoint_path.name}.{uuid4().hex}.tmp")
     try:
-        with temporary.open("wb") as file:
-            torch.save(checkpoint_state, file)
-            file.flush()
-            os.fsync(file.fileno())
+        with temporary.open("wb") as handle:
+            torch.save(checkpoint_state, handle)
+            handle.flush()
+            os.fsync(handle.fileno())
         os.replace(temporary, checkpoint_path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -562,6 +565,8 @@ def fit_binary_change_model(
     patience: int | None = None,
     min_epochs: int = 1,
     min_delta: float = 0.0,
+    reset_early_stopping: bool = False,
+    stop_file: str | Path | None = None,
 ) -> list[dict[str, Any]]:
     """Train or resume, optionally stopping after patience epochs without F1 gain.
 
@@ -768,13 +773,17 @@ def fit_binary_change_model(
                 best_metrics["validation_f1"]
             )
 
-        early_stopping.load_state_dict(checkpoint.get("early_stopping"), saved_epoch)
+        if reset_early_stopping:
+            # Explicit phase promotion: preserve weights/optimizer/scheduler/RNG/best history.
+            early_stopping.last_epoch = saved_epoch
+        else:
+            early_stopping.load_state_dict(checkpoint.get("early_stopping"), saved_epoch)
         best_weights = _best_weights(checkpoint, resume_path)
         on_rank_zero(lambda: restore_best_checkpoint(
             checkpoint, resume_path, run_directory / "best.pt"
         ))
         # Discard loaded optimizer tensors on CPU after loading into the optimizer.
-        del checkpoint
+
 
         print(
             "Resumed from checkpoint:",
@@ -1077,6 +1086,13 @@ def fit_binary_change_model(
             _save_checkpoint(run_directory / "last.pt", checkpoint_state)
 
         on_rank_zero(save_epoch)
+        pause_requested = any(gather_objects(
+            stop_file is not None and Path(stop_file).exists()
+        ))
+        if pause_requested:
+            if rank() == 0:
+                print(f"{log_prefix}Paused after saving epoch {epoch}.", flush=True)
+            break
         if rank() != 0:
             if should_stop:
                 break
@@ -1135,3 +1151,6 @@ def fit_binary_change_model(
             break
 
     return metric_history
+
+
+HPO_TRAINER_PATCH_VERSION = 1

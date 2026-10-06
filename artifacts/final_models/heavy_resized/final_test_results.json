@@ -1,0 +1,52 @@
+{
+  "model": "siam_mit_b3_diff",
+  "variant": "heavy_resized",
+  "image_size": 256,
+  "seeds": [
+    42
+  ],
+  "std_type": "sample",
+  "std_ddof": 1,
+  "number_of_pairs": 128,
+  "evaluation_batch_size": 1,
+  "results": [
+    {
+      "trial": "trial_007",
+      "seed": 42,
+      "best_validation_epoch": 59,
+      "validation_threshold": 0.85,
+      "original_validation_f1": 0.7755862537285373,
+      "original_validation_iou": 0.6334347814130006,
+      "test_loss": 0.3445264058391331,
+      "test_precision": 0.7410503395335105,
+      "test_recall": 0.7516646623648267,
+      "test_f1": 0.7463197630524421,
+      "test_iou": 0.5953031251968767,
+      "test_accuracy": 0.9739639759063721,
+      "test_tp": 321272,
+      "test_fp": 112264,
+      "test_fn": 106142,
+      "test_tn": 7848930,
+      "threshold_source": "saved_validation",
+      "validation_f1": 0.7755862537285373,
+      "validation_iou": 0.6334347814130006,
+      "recomputed_validation_f1": 0.775654905480451,
+      "recomputed_validation_iou": 0.6335263717333138
+    }
+  ],
+  "precision": "fp32",
+  "metric_aggregation": "global pixel confusion counts within each seed; mean across seeds",
+  "threshold_selection": "saved or explicitly supplied validation threshold; no test tuning",
+  "test_loss_mean": 0.3445264058391331,
+  "test_loss_std": null,
+  "test_precision_mean": 0.7410503395335105,
+  "test_precision_std": null,
+  "test_recall_mean": 0.7516646623648267,
+  "test_recall_std": null,
+  "test_f1_mean": 0.7463197630524421,
+  "test_f1_std": null,
+  "test_iou_mean": 0.5953031251968767,
+  "test_iou_std": null,
+  "test_accuracy_mean": 0.9739639759063721,
+  "test_accuracy_std": null
+}

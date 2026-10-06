@@ -1,0 +1,114 @@
+{
+  "model_name": "siam_mit_b3_diff",
+  "number_of_trials": 1,
+  "results": [
+    {
+      "trial": 7,
+      "status": "completed",
+      "resumed_from": null,
+      "resumed_epoch": 0,
+      "new_epochs_completed": 60,
+      "last_attempt_seconds": 7417.911769468337,
+      "timing_scope": "attempt_wall",
+      "budget_epochs": 60,
+      "epochs_completed": 60,
+      "stopped_early": false,
+      "stop_reason": "max_epochs",
+      "early_stopping": {
+        "monitor": "validation_f1",
+        "patience": 20,
+        "min_epochs": 40,
+        "min_delta": 0.001
+      },
+      "gpu_id": 2,
+      "total_parameters": 45772961,
+      "trainable_parameters": 45772961,
+      "parameters": {
+        "batch_size": 4,
+        "bce_weight": 0.5,
+        "dice_weight": 0.5,
+        "image_size": 256,
+        "learning_rate": 0.0006,
+        "num_workers": 0,
+        "positive_weight": 10,
+        "precision": "bf16",
+        "scheduler": "none",
+        "seed": 42,
+        "weight_decay": 0.01,
+        "model_parameters": {
+          "attention_dropout": 0.0,
+          "decoder_channels": 128,
+          "drop_path_rate": 0.1,
+          "dropout": 0.0,
+          "encoder_depths": [
+            3,
+            4,
+            18,
+            3
+          ],
+          "in_channels": 3,
+          "norm_groups": 8,
+          "out_channels": 1,
+          "pretrained_backbone": false,
+          "refinement_channels": [
+            64,
+            32
+          ],
+          "use_checkpointing": false
+        },
+        "execution_mode": "independent_hpo",
+        "world_size": 1,
+        "architecture_variant": "canonical_mit_b3",
+        "code_revision": "81a5e53351305c644823eb1301ac86f10d234675",
+        "torch_version": "2.12.1+cu130",
+        "cuda_version": "13.0",
+        "thresholds": [
+          0.05,
+          0.1,
+          0.15,
+          0.2,
+          0.25,
+          0.3,
+          0.35,
+          0.4,
+          0.45,
+          0.5,
+          0.55,
+          0.6,
+          0.65,
+          0.7,
+          0.75,
+          0.8,
+          0.85,
+          0.9,
+          0.95
+        ],
+        "dataset_root": "data/LEVIR-CD",
+        "budget_epochs": 60
+      },
+      "best_epoch": 59,
+      "best_threshold": 0.85,
+      "best_validation_loss": 0.28780445363372564,
+      "best_precision": 0.7663332187337112,
+      "best_recall": 0.7850654699349561,
+      "best_f1": 0.7755862537285373,
+      "best_iou": 0.6334347814130006,
+      "training_seconds": 7417.911769468337,
+      "seconds_per_epoch": 123.6318628244723,
+      "gpu_hours": 2.060531047074538,
+      "peak_gpu_memory_mb": 2346.85791015625,
+      "oom_retries": 0,
+      "gpu_attempts": [
+        {
+          "attempt": 1,
+          "gpu_id": 2,
+          "free_memory_before_mb": 46979.125,
+          "status": "completed"
+        }
+      ],
+      "source_checkpoint": "artifacts/hyperparameter_search/heavy/heavy_resized/heavy_resized_from_best_60ep_v3/03_loss_4e5a461f5cf3/siam_mit_b3_diff/trial_007/best.pt",
+      "source_summary": "artifacts/hyperparameter_search/heavy/heavy_resized/heavy_resized_from_best_60ep_v3/03_loss_4e5a461f5cf3/siam_mit_b3_diff/trial_007/summary.json",
+      "seed": 42
+    }
+  ]
+}
