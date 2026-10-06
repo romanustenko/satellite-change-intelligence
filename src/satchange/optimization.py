@@ -7,10 +7,9 @@ import multiprocessing as mp
 import os
 import random
 import re
-import warnings
-from uuid import uuid4
 import subprocess
 import time
+import warnings
 from concurrent.futures import (
     FIRST_COMPLETED,
     ProcessPoolExecutor,
@@ -20,6 +19,7 @@ from copy import deepcopy
 from itertools import product
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import numpy as np
 import torch
@@ -28,20 +28,23 @@ from satchange.data import (
     RandomFlipRotate,
     create_dataset_dataloader,
 )
+from satchange.execution import resolve_device
 from satchange.losses import BCEDiceLoss
 from satchange.models.factory import (
-    MODEL_REGISTRY,
+    BINARY_TASK,
+    SEMANTIC_TASK,
     count_model_parameters,
-    create_change_model,
+    create_task_model,
+    model_class_for_task,
 )
 from satchange.training import (
     EarlyStopping,
-    fit_binary_change_model,
-    find_training_checkpoint,
-    load_training_checkpoint,
-    restore_best_checkpoint,
     _best_weights,
     _save_checkpoint,
+    find_training_checkpoint,
+    fit_binary_change_model,
+    load_training_checkpoint,
+    restore_best_checkpoint,
 )
 
 
@@ -184,6 +187,25 @@ def _create_scheduler(
 def _format_trial_parameters(parameters: dict[str, Any]) -> str:
     """Return training and resolved architecture parameters as one compact line."""
 
+    if parameters.get("task") == SEMANTIC_TASK:
+        return " | ".join(
+            [
+                f"task={SEMANTIC_TASK}",
+                *[
+                    f"{key}={parameters.get(key)}"
+                    for key in (
+                        "seed",
+                        "learning_rate",
+                        "weight_decay",
+                        "batch_size",
+                        "scheduler",
+                        "precision",
+                        "tf32",
+                    )
+                ],
+                f"dropout={parameters['model_parameters']['dropout']}",
+            ]
+        )
     return " | ".join(
         [
             f"seed={parameters.get('seed')}",
@@ -239,7 +261,12 @@ _RESUME_TRAINING_KEYS = {
 
 
 def _resume_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
-    values = {key: parameters[key] for key in _RESUME_TRAINING_KEYS if key in parameters}
+    keys = _RESUME_TRAINING_KEYS
+    if parameters.get("task", BINARY_TASK) == SEMANTIC_TASK:
+        keys = {"task", "model_parameters", "semantic_config", "prepared_identity", "class_weights",
+                "seed", "batch_size", "num_workers", "learning_rate", "weight_decay", "scheduler",
+                "precision", "tf32"}
+    values = {key: parameters[key] for key in keys if key in parameters}
     values.setdefault("precision", "fp32")
     # JSON normalizes tuple/list architecture and loss parameters consistently.
     return json.loads(json.dumps(values, sort_keys=True, allow_nan=False))
@@ -253,15 +280,22 @@ def read_hpo_checkpoint(
     """Validate a full checkpoint before reusing its trajectory, not just its weights."""
     state = load_training_checkpoint(path)
     saved = state.get("config")
-    if not isinstance(saved, dict) or (_RESUME_TRAINING_KEYS - {"precision"}) - saved.keys():
+    semantic = isinstance(saved, dict) and saved.get("task") == SEMANTIC_TASK
+    if not isinstance(saved, dict) or (not semantic and
+            (_RESUME_TRAINING_KEYS - {"precision"}) - saved.keys()):
         raise ValueError(f"Checkpoint has no complete HPO parameters: {path}")
+    if semantic:
+        from satchange.semantic.training import validate_parameters
+        validate_parameters(saved)
+        if state.get("task") != SEMANTIC_TASK or thresholds:
+            raise ValueError("Semantic checkpoint task/threshold contract mismatch.")
     if state.get("model_name") != model_name or state.get("world_size", 1) != 1:
         raise ValueError(f"Checkpoint model/world size differs from this independent HPO: {path}")
     if parameters is not None and _resume_parameters(saved) != _resume_parameters(parameters):
         raise ValueError(f"Checkpoint training parameters differ from the requested trial: {path}")
     if state.get("precision", "fp32") != saved.get("precision", "fp32"):
         raise ValueError(f"Checkpoint precision metadata is inconsistent: {path}")
-    if saved.get("thresholds", state.get("thresholds")) != list(thresholds):
+    if not semantic and saved.get("thresholds", state.get("thresholds")) != list(thresholds):
         raise ValueError(f"Checkpoint validation thresholds differ: {path}")
     if "dataset_root" in saved:
         if Path(saved["dataset_root"]).resolve() != Path(dataset_root).resolve():
@@ -269,7 +303,7 @@ def read_hpo_checkpoint(
     else:
         warnings.warn(
             f"Legacy checkpoint {path} has no dataset path: verify it uses the same dataset.",
-            RuntimeWarning,
+            RuntimeWarning, stacklevel=2,
         )
     epoch = state["epoch"]
     history = state.get("history", [])
@@ -277,10 +311,17 @@ def read_hpo_checkpoint(
         raise ValueError(f"Checkpoint exceeds the target budget or has incomplete history: {path}")
     if not state.get("rng_states"):
         raise ValueError(f"Checkpoint has no RNG/loader state for continuation: {path}")
-    expected_best = max(history, key=lambda row: row["validation_f1"])
+    expected_best = max(
+        history, key=lambda row: row["selection_score" if semantic else "validation_f1"]
+    )
     if state.get("best_metrics", {}).get("epoch") != expected_best["epoch"]:
         raise ValueError(f"Checkpoint best epoch disagrees with history: {path}")
-    stopper = EarlyStopping(early_stopping.patience, early_stopping.min_epochs, early_stopping.min_delta)
+    stopper = EarlyStopping(
+        early_stopping.patience,
+        early_stopping.min_epochs,
+        early_stopping.min_delta,
+        monitor=early_stopping.monitor,
+    )
     stopper.load_state_dict(state.get("early_stopping"), epoch)
     if (saved["scheduler"] == "none") != (state.get("scheduler_state_dict") is None):
         raise ValueError(f"Checkpoint scheduler state is inconsistent: {path}")
@@ -304,7 +345,12 @@ def _prepare_trial_resume(
     state["config"] = deepcopy(parameters)
     state["resumed_from"] = str(source.resolve())
     # A previously running epoch can itself be the new absolute target.
-    restored_stopper = EarlyStopping(early_stopping.patience, early_stopping.min_epochs, early_stopping.min_delta)
+    restored_stopper = EarlyStopping(
+        early_stopping.patience,
+        early_stopping.min_epochs,
+        early_stopping.min_delta,
+        monitor=early_stopping.monitor,
+    )
     restored_stopper.load_state_dict(state.get("early_stopping"), state["epoch"])
     reason = (
         "max_epochs" if state["epoch"] == budget
@@ -334,7 +380,9 @@ def _write_json_atomic(path: Path, value: Any) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
     try:
-        temporary.write_text(json.dumps(value, indent=2, default=str, allow_nan=False), encoding="utf-8")
+        temporary.write_text(
+            json.dumps(value, indent=2, default=str, allow_nan=False), encoding="utf-8"
+        )
         temporary.replace(path)
     finally:
         temporary.unlink(missing_ok=True)
@@ -358,7 +406,10 @@ def _run_single_trial(
     resume_from: str | Path | None = None,
 ) -> dict[str, Any]:
     """Run one independent training trial, optionally with early stopping."""
-    early_stopping = EarlyStopping(patience, min_epochs, min_delta)
+    task = parameters.get("task", BINARY_TASK)
+    semantic = task == SEMANTIC_TASK
+    score_key = "selection_score" if semantic else "validation_f1"
+    early_stopping = EarlyStopping(patience, min_epochs, min_delta, monitor=score_key)
     early_stopping.validate_budget(number_of_epochs)
 
 
@@ -369,13 +420,12 @@ def _run_single_trial(
     torch.backends.cudnn.benchmark = False
     torch.backends.cudnn.deterministic = True
 
-    device = torch.device(
-        f"cuda:{gpu_id}"
-    )
-
-    torch.cuda.set_device(
-        device
-    )
+    device = resolve_device(f"cuda:{gpu_id}")
+    if device.type == "cuda":
+        torch.cuda.set_device(device)
+    if semantic:
+        torch.backends.cuda.matmul.allow_tf32 = parameters["tf32"]
+        torch.backends.cudnn.allow_tf32 = parameters["tf32"]
 
     print(
         f"[Trial {trial_number:03d} | GPU {gpu_id}] "
@@ -396,76 +446,95 @@ def _run_single_trial(
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    training_transform = RandomFlipRotate(
-        horizontal_flip_probability=0.5,
-        vertical_flip_probability=0.5,
-    )
-
-    _, train_loader = (
-        create_dataset_dataloader(
-            dataset_root=dataset_root,
-            split="train",
-            image_size=parameters[
-                "image_size"
-            ],
-            batch_size=parameters[
-                "batch_size"
-            ],
-            num_workers=parameters[
-                "num_workers"
-            ],
-            transform=training_transform,
-            shuffle=True,
-            pin_memory=True,
-            seed=seed,
+    if semantic:
+        from satchange.semantic.training import create_loaders, validate_parameters
+        validate_parameters(parameters)
+        train_loader, validation_loader = create_loaders(dataset_root, parameters)
+    else:
+        training_transform = RandomFlipRotate(
+            horizontal_flip_probability=0.5,
+            vertical_flip_probability=0.5,
         )
-    )
 
-    _, validation_loader = (
-        create_dataset_dataloader(
-            dataset_root=dataset_root,
-            split="val",
-            image_size=parameters[
-                "image_size"
-            ],
-            batch_size=parameters[
-                "batch_size"
-            ],
-            num_workers=parameters[
-                "num_workers"
-            ],
-            pin_memory=True,
+        _, train_loader = (
+            create_dataset_dataloader(
+                dataset_root=dataset_root,
+                split="train",
+                image_size=parameters[
+                    "image_size"
+                ],
+                batch_size=parameters[
+                    "batch_size"
+                ],
+                num_workers=parameters[
+                    "num_workers"
+                ],
+                transform=training_transform,
+                shuffle=True,
+                pin_memory=True,
+                seed=seed,
+            )
         )
-    )
 
-    model = create_change_model(
-        model_name=model_name,
+        _, validation_loader = (
+            create_dataset_dataloader(
+                dataset_root=dataset_root,
+                split="val",
+                image_size=parameters[
+                    "image_size"
+                ],
+                batch_size=parameters[
+                    "batch_size"
+                ],
+                num_workers=parameters[
+                    "num_workers"
+                ],
+                pin_memory=True,
+            )
+        )
+
+    model = create_task_model(
+        model_name=model_name, task=task,
         parameters=parameters[
             "model_parameters"
         ],
     ).to(device)
 
+    if semantic:
+        from satchange.semantic.data import SemanticROIDataset
+        assert isinstance(train_loader.dataset, SemanticROIDataset)
+        parameters["training_data"] = {
+            "scenes": [{key: row[key] for key in ("sample_id", "group_id", "split", "rgb_hashes")}
+                       for row in train_loader.dataset.document["provenance"]["scenes"]],
+            "protocol": train_loader.dataset.document["protocol"],
+        }
     parameters["code_revision"] = subprocess.run(
         ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
     ).stdout.strip()
     parameters["torch_version"] = str(torch.__version__)
     parameters["cuda_version"] = torch.version.cuda
-    parameters["thresholds"] = list(thresholds)
+    if not semantic:
+        parameters["thresholds"] = list(thresholds)
     parameters["dataset_root"] = str(Path(dataset_root).resolve())
     parameters["budget_epochs"] = number_of_epochs
     parameter_counts = count_model_parameters(model)
 
-    loss_function = BCEDiceLoss(
-        bce_weight=parameters[
-            "bce_weight"
-        ],
-        dice_weight=parameters[
-            "dice_weight"
-        ],
-        pos_weight=parameters[
-            "positive_weight"
-        ],
-    ).to(device)
+    loss_function: torch.nn.Module
+    if semantic:
+        from satchange.semantic.training import SemanticCELoss
+        loss_function = SemanticCELoss(parameters["class_weights"]).to(device)
+    else:
+        loss_function = BCEDiceLoss(
+            bce_weight=parameters[
+                "bce_weight"
+            ],
+            dice_weight=parameters[
+                "dice_weight"
+            ],
+            pos_weight=parameters[
+                "positive_weight"
+            ],
+        ).to(device)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -488,9 +557,8 @@ def _run_single_trial(
         f"trial_{trial_number:03d}"
     )
 
-    torch.cuda.reset_peak_memory_stats(
-        device
-    )
+    if device.type == "cuda":
+        torch.cuda.reset_peak_memory_stats(device)
 
     started_at = time.perf_counter()
 
@@ -501,7 +569,9 @@ def _run_single_trial(
         number_of_epochs, early_stopping,
     )
     saved_epoch = len(previous_history)
-    already_stopped = bool(previous_history and previous_history[-1].get("stop_reason") == "early_stopping")
+    already_stopped = bool(
+        previous_history and previous_history[-1].get("stop_reason") == "early_stopping"
+    )
     if saved_epoch == number_of_epochs or already_stopped:
         history = previous_history
     else:
@@ -521,7 +591,7 @@ def _run_single_trial(
                 checkpoint_interval
             ),
             config=parameters,
-            precision=parameters.get("precision", "fp32"),
+            precision=parameters.get("precision", "fp32"), task=task,
             resume_from=local_checkpoint,
             scheduler=scheduler,
             patience=patience,
@@ -533,9 +603,8 @@ def _run_single_trial(
             ),
         )
     # Pause the code and wait until GPU processes end
-    torch.cuda.synchronize(
-        device
-    )
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
 
     training_seconds = (
         time.perf_counter()
@@ -549,7 +618,7 @@ def _run_single_trial(
     best_result = max(
         history,
         key=lambda result: (
-            result["validation_f1"]
+            result[score_key]
         ),
     )
 
@@ -568,59 +637,51 @@ def _run_single_trial(
         "resumed_epoch": saved_epoch,
         "new_epochs_completed": len(history) - saved_epoch,
         "last_attempt_seconds": last_attempt_seconds,
-        "timing_scope": "retained_epoch_compute_plus_last_attempt_wall" if saved_epoch else "attempt_wall",
-
+        "timing_scope": "retained_epoch_compute_plus_last_attempt_wall"
+        if saved_epoch
+        else "attempt_wall",
         **_summarize_training_completion(history, number_of_epochs, early_stopping),
         "gpu_id": gpu_id,
         **parameter_counts,
         "parameters": parameters,
-        "best_epoch": (
-            best_result["epoch"]
+        "best_epoch": (best_result["epoch"]),
+        **(
+            {
+                "task": task,
+                "selection_score": best_result[score_key],
+                "best_validation_loss": best_result["validation_loss"],
+                "selected_metrics": {
+                    key: best_result[key]
+                    for key in (
+                        "before_macro_f1",
+                        "after_macro_f1",
+                        "before_accuracy",
+                        "after_accuracy",
+                        "joint_accuracy",
+                        "before_confusion",
+                        "after_confusion",
+                        "before_per_class",
+                        "after_per_class",
+                        "selection_rule",
+                        "classes",
+                        "samples",
+                    )
+                },
+            }
+            if semantic
+            else {
+                "best_threshold": (best_result["best_threshold"]),
+                "best_validation_loss": (best_result["validation_loss"]),
+                "best_precision": (best_result["validation_precision"]),
+                "best_recall": (best_result["validation_recall"]),
+                "best_f1": (best_result["validation_f1"]),
+                "best_iou": (best_result["validation_iou"]),
+            }
         ),
-        "best_threshold": (
-            best_result[
-                "best_threshold"
-            ]
-        ),
-        "best_validation_loss": (
-            best_result[
-                "validation_loss"
-            ]
-        ),
-        "best_precision": (
-            best_result[
-                "validation_precision"
-            ]
-        ),
-        "best_recall": (
-            best_result[
-                "validation_recall"
-            ]
-        ),
-        "best_f1": (
-            best_result[
-                "validation_f1"
-            ]
-        ),
-        "best_iou": (
-            best_result[
-                "validation_iou"
-            ]
-        ),
-        "training_seconds": (
-            training_seconds
-        ),
-        "seconds_per_epoch": (
-            training_seconds
-            / len(history)
-        ),
-        "gpu_hours": (
-            training_seconds
-            / 3600.0
-        ),
-        "peak_gpu_memory_mb": (
-            peak_gpu_memory_mb
-        ),
+        "training_seconds": (training_seconds),
+        "seconds_per_epoch": (training_seconds / len(history)),
+        "gpu_hours": (training_seconds * (device.type == "cuda") / 3600.0),
+        "peak_gpu_memory_mb": (peak_gpu_memory_mb),
     }
 
     trial_directory = (
@@ -959,7 +1020,9 @@ def _trial_directory(
     )
 
 
-def _archive_partial_trial_output(search_output_root: str | Path, model_name: str, trial_number: int) -> None:
+def _archive_partial_trial_output(
+    search_output_root: str | Path, model_name: str, trial_number: int
+) -> None:
     """Preserve an abandoned attempt when recovery was explicitly disabled."""
     directory = _trial_directory(search_output_root, model_name, trial_number)
     if directory.exists():
@@ -1025,7 +1088,11 @@ def run_parameter_search(
       running. After every other trial finishes, ``ParameterSearchMemoryError``
       is raised and the full search summary is already written to disk.
     """
-    early_stopping = EarlyStopping(patience, min_epochs, min_delta)
+    search_trials = _expand_search_space(search_space)
+    task = _build_trial_parameters(fixed_parameters, search_trials[0]).get("task", BINARY_TASK)
+    semantic = task == SEMANTIC_TASK
+    early_stopping = EarlyStopping(patience, min_epochs, min_delta,
+                                  monitor="selection_score" if semantic else "validation_f1")
     early_stopping.validate_budget(number_of_epochs)
     if type(resume_incomplete) is not bool:
         raise ValueError("resume_incomplete must be a boolean.")
@@ -1045,10 +1112,8 @@ def run_parameter_search(
         raise ValueError("oom_retry_memory_margin_mb cannot be negative.")
 
     model_name = model_name.strip().lower()
-    if model_name not in MODEL_REGISTRY:
-        raise ValueError(f"Unknown model: {model_name}")
+    model_class = model_class_for_task(model_name, task)
 
-    search_trials = _expand_search_space(search_space)
     trial_space = []
 
     for trial_number, search_parameters in enumerate(search_trials):
@@ -1057,18 +1122,24 @@ def run_parameter_search(
             search_parameters=search_parameters,
         )
 
+        if parameters.get("task", BINARY_TASK) != task:
+            raise ValueError("A queue cannot mix different training tasks.")
         allowed_training = {
             "model_parameters", "seed", "image_size", "batch_size", "num_workers",
             "learning_rate", "weight_decay", "scheduler", "positive_weight",
             "bce_weight", "dice_weight", "precision", "execution_mode",
         }
+        if semantic:
+            from satchange.semantic.training import validate_parameters
+            validate_parameters(parameters)
+            allowed_training = set(_resume_parameters(parameters)) | {"execution_mode"}
         unknown_training = parameters.keys() - allowed_training
         if unknown_training:
             raise ValueError(f"Unsupported trial parameters: {sorted(unknown_training)}")
         if parameters.get("precision", "fp32") not in ("fp32", "bf16"):
             raise ValueError("precision must be fp32 or bf16.")
 
-        supported = inspect.signature(MODEL_REGISTRY[model_name]).parameters
+        supported = inspect.signature(model_class).parameters
         unknown = parameters["model_parameters"].keys() - supported.keys()
         if unknown:
             raise ValueError(f"Unsupported architecture parameters: {sorted(unknown)}")
@@ -1337,8 +1408,12 @@ def run_parameter_search(
                             f"total={result['total_parameters']:,} | "
                             f"trainable={result['trainable_parameters']:,}",
                         )
-                        print("F1:", f"{result['best_f1']:.6f}")
-                        print("IoU:", f"{result['best_iou']:.6f}")
+                        if semantic:
+                            print("Selection score:", f"{result['selection_score']:.6f}")
+                        else:
+                            print("F1:", f"{result['best_f1']:.6f}")
+                        if not semantic:
+                            print("IoU:", f"{result['best_iou']:.6f}")
                         print(
                             "Epochs:",
                             f"{result['epochs_completed']}/{result['budget_epochs']} "
@@ -1490,7 +1565,7 @@ def run_parameter_search(
             executor.shutdown(wait=True)
 
     results.sort(
-        key=lambda result: result["best_f1"],
+        key=lambda result: result["selection_score" if semantic else "best_f1"],
         reverse=True,
     )
 

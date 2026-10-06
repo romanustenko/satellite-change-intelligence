@@ -4,6 +4,7 @@ Only this file knows the project's data/model/loss/trainer/checkpoint schema.
 Legacy experiment folders are read-only. New runs live in the NEW search folder.
 All .pt inputs must be your own checkpoints (the project uses full torch.load).
 """
+
 from __future__ import annotations
 
 import inspect
@@ -12,35 +13,87 @@ import math
 import os
 import shutil
 import subprocess
-import time
+from collections.abc import Mapping, Sequence
 from copy import deepcopy
 from hashlib import sha256
 from pathlib import Path
-from typing import Any, Mapping, Sequence
+from typing import Any, cast
 
 import torch
 
 from satchange.data import RandomFlipRotate, create_dataset_dataloader
-from satchange.execution import seed_everything
+from satchange.execution import resolve_device, seed_everything
 from satchange.hpo_core import canonical, read_json, write_json
 from satchange.losses import BCEDiceLoss
-from satchange.models.factory import MODEL_REGISTRY, count_model_parameters, create_change_model
-from satchange.optimization import _build_trial_parameters, _create_scheduler, _is_cuda_oom_error, _parse_cuda_oom_message
-from satchange.training import EarlyStopping, fit_binary_change_model, _save_checkpoint
+from satchange.models.factory import (
+    MODEL_REGISTRY,
+    SEMANTIC_TASK,
+    count_model_parameters,
+    create_task_model,
+)
+from satchange.optimization import (
+    _build_trial_parameters,
+    _create_scheduler,
+    _is_cuda_oom_error,
+    _parse_cuda_oom_message,
+)
+from satchange.training import EarlyStopping, _save_checkpoint, fit_binary_change_model
 
 TRAIN_KEYS = {
-    "seed", "model_parameters", "image_size", "batch_size", "num_workers",
-    "learning_rate", "weight_decay", "scheduler", "positive_weight", "bce_weight",
-    "dice_weight", "precision",
+    "seed",
+    "model_parameters",
+    "image_size",
+    "batch_size",
+    "num_workers",
+    "learning_rate",
+    "weight_decay",
+    "scheduler",
+    "positive_weight",
+    "bce_weight",
+    "dice_weight",
+    "precision",
+}
+SEMANTIC_TRAIN_KEYS = {
+    "task",
+    "semantic_config",
+    "prepared_identity",
+    "class_weights",
+    "tf32",
+    "seed",
+    "model_parameters",
+    "batch_size",
+    "num_workers",
+    "learning_rate",
+    "weight_decay",
+    "scheduler",
+    "precision",
 }
 GENERATED_KEYS = {
-    "epochs", "number_of_epochs", "code_revision", "torch_version", "cuda_version",
-    "thresholds", "world_size", "execution_mode", "architecture_variant", "model_name",
-    "early_stopping", "patience", "min_epochs", "min_delta", "resume_from",
-    "source_checkpoint", "target_epoch", "hpo_phase", "run_name",
+    "epochs",
+    "number_of_epochs",
+    "code_revision",
+    "torch_version",
+    "cuda_version",
+    "thresholds",
+    "world_size",
+    "execution_mode",
+    "architecture_variant",
+    "model_name",
+    "early_stopping",
+    "patience",
+    "min_epochs",
+    "min_delta",
+    "resume_from",
+    "source_checkpoint",
+    "target_epoch",
+    "hpo_phase",
+    "run_name",
     # Legacy run metadata: accepted on input, never part of a configuration identity.
     # dataset_root is checked against the requested data before a checkpoint is reused.
-    "budget_epochs", "dataset_root",
+    "budget_epochs",
+    "dataset_root",
+    "training_data",
+    "gpu_id",
 }
 
 
@@ -53,8 +106,9 @@ def _load(path: Path) -> dict[str, Any]:
         prefix = handle.read(100)
     if prefix.startswith(b"version https://git-lfs.github.com/spec/v1"):
         raise ValueError(f"Git LFS pointer, not actual weights: {path}")
-    payload = torch.load(path, map_location="cpu", weights_only=False,
-                         mmap=prefix.startswith(b"PK"))
+    payload = torch.load(
+        path, map_location="cpu", weights_only=False, mmap=prefix.startswith(b"PK")
+    )
     if not isinstance(payload, dict) or "model_state_dict" not in payload:
         raise ValueError(f"Expected a complete project checkpoint, not a raw state_dict: {path}")
     return payload
@@ -67,12 +121,18 @@ def _policy(value: Any) -> dict[str, Any] | None:
         value = value["policy"]
     if value is None or value.get("patience") is None:
         return None
-    return EarlyStopping(**{key: value[key] for key in ("patience", "min_epochs", "min_delta")}).policy
+    return EarlyStopping(
+        **{key: value[key] for key in ("patience", "min_epochs", "min_delta")},
+        monitor=value.get("monitor", "validation_f1"),
+    ).policy
 
 
 def _stopping_arguments(policy: dict[str, Any] | None) -> dict[str, Any]:
-    return {"patience": None} if policy is None else {
-        key: policy[key] for key in ("patience", "min_epochs", "min_delta")}
+    return (
+        {"patience": None}
+        if policy is None
+        else {key: policy[key] for key in ("patience", "min_epochs", "min_delta")}
+    )
 
 
 def _check_dataset(document: Mapping[str, Any], context: Mapping[str, Any], source: Path) -> None:
@@ -89,32 +149,47 @@ def _check_dataset(document: Mapping[str, Any], context: Mapping[str, Any], sour
         raise ValueError(f"Invalid saved dataset_root in {source}: {value!r}")
     saved = Path(value).expanduser()
     if not saved.is_absolute():
+        base: Path | None
         project_root = context.get("project_root")
         if project_root is not None:
             base = Path(project_root).expanduser().resolve()
         else:
-            base = next((parent for parent in source.resolve().parents
-                         if (parent / "src/satchange").is_dir()
-                         or (parent / "pyproject.toml").is_file()), None)
+            base = next(
+                (
+                    parent
+                    for parent in source.resolve().parents
+                    if (parent / "src/satchange").is_dir() or (parent / "pyproject.toml").is_file()
+                ),
+                None,
+            )
         if base is None:
             raise ValueError(
                 f"Cannot resolve relative dataset_root={value!r} in {source}. "
-                'Supply backend_context={"project_root": <source project root>}.')
+                'Supply backend_context={"project_root": <source project root>}.'
+            )
         saved = base / saved
     expected = Path(context["dataset_root"]).expanduser().resolve()
     if saved.resolve() != expected:
-        raise ValueError(f"Dataset path differs in {source}: saved={saved.resolve()}, expected={expected}")
+        raise ValueError(
+            f"Dataset path differs in {source}: saved={saved.resolve()}, expected={expected}"
+        )
 
 
-def _saved_budget(summary: Mapping[str, Any], checkpoint: Mapping[str, Any],
-                  fallback: int | None, source: Path) -> int | None:
+def _saved_budget(
+    summary: Mapping[str, Any], checkpoint: Mapping[str, Any], fallback: int | None, source: Path
+) -> int | None:
     """Read the run's total budget, not an additional-epochs training argument."""
     config = checkpoint.get("config") or {}
     # A current summary or final-budget annotation can supersede a historical
     # best.pt config. Request/protocol budgets are preferable to legacy 'epochs'.
-    candidates = (summary.get("budget_epochs"), checkpoint.get("training_budget_epochs"),
-                  config.get("budget_epochs"), config.get("target_epoch"), fallback,
-                  config.get("epochs"))
+    candidates = (
+        summary.get("budget_epochs"),
+        checkpoint.get("training_budget_epochs"),
+        config.get("budget_epochs"),
+        config.get("target_epoch"),
+        fallback,
+        config.get("epochs"),
+    )
     value = next((value for value in candidates if value is not None), None)
     if value is not None and (type(value) is not int or value < 1):
         raise ValueError(f"Invalid saved epoch budget in {source}: {value!r}")
@@ -127,13 +202,14 @@ class SatelliteBackend:
     def normalize(self, parameters: Mapping[str, Any]) -> dict[str, Any]:
         merged = _build_trial_parameters(dict(parameters), {})
         # Preserve None, zero and false. Do not silently discard unknown training controls.
-        unknown = set(merged) - TRAIN_KEYS - GENERATED_KEYS
+        keys = SEMANTIC_TRAIN_KEYS if merged.get("task") == SEMANTIC_TASK else TRAIN_KEYS
+        unknown = set(merged) - keys - GENERATED_KEYS
         if unknown:
             raise ValueError(f"Unsupported training fields: {sorted(unknown)}")
-        result = {key: deepcopy(value) for key, value in merged.items() if key in TRAIN_KEYS}
+        result = {key: deepcopy(value) for key, value in merged.items() if key in keys}
         result.setdefault("precision", "fp32")
         result.setdefault("model_parameters", {})
-        return json.loads(canonical(result))
+        return cast(dict[str, Any], json.loads(canonical(result)))
 
     def merge(self, base: dict, variation: dict) -> dict:
         return self.normalize(_build_trial_parameters(base, variation))
@@ -141,6 +217,22 @@ class SatelliteBackend:
     def validate(self, parameters: dict, context: dict) -> None:
         if torch.distributed.is_initialized() or int(os.environ.get("WORLD_SIZE", "1")) > 1:
             raise ValueError("Independent HPO cannot run inside torchrun/DDP.")
+        if context.get("task") == SEMANTIC_TASK:
+            from satchange.semantic.data import file_digest
+            from satchange.semantic.training import validate_parameters
+
+            if context["model_name"] != "tiny_siamese_change_classifier":
+                raise ValueError("The semantic task requires tiny_siamese_change_classifier.")
+            validate_parameters(parameters)
+            prepared = Path(context["dataset_root"])
+            prepared = prepared / "prepared.json" if prepared.is_dir() else prepared
+            if file_digest(prepared) != parameters["prepared_identity"]:
+                raise ValueError(
+                    "Prepared semantic data identity differs from the training parameters."
+                )
+            if context["thresholds"]:
+                raise ValueError("Semantic trials use no thresholds.")
+            return
         missing = TRAIN_KEYS - parameters.keys()
         if missing:
             raise ValueError(f"Missing training parameters: {sorted(missing)}")
@@ -160,24 +252,46 @@ class SatelliteBackend:
             raise ValueError("Use a scheduler supported by optimization._create_scheduler.")
         for key in ("learning_rate", "weight_decay"):
             value = parameters[key]
-            if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value < 0:
+            if (
+                isinstance(value, bool)
+                or not isinstance(value, (int, float))
+                or not math.isfinite(value)
+                or value < 0
+            ):
                 raise ValueError(f"Invalid {key}: {value}")
-        BCEDiceLoss(bce_weight=parameters["bce_weight"], dice_weight=parameters["dice_weight"],
-                    pos_weight=parameters["positive_weight"])
+        BCEDiceLoss(
+            bce_weight=parameters["bce_weight"],
+            dice_weight=parameters["dice_weight"],
+            pos_weight=parameters["positive_weight"],
+        )
 
     def code_signature(self) -> str:
         package = Path(__file__).resolve().parent
-        names = {"training.py", "execution.py", "losses.py", "metrics.py", "hpo_backend.py", "optimization.py"}
-        files = [p for p in package.rglob("*.py")
-                 if p.name in names or p.parent.name in ("data", "models")]
+        names = {
+            "training.py",
+            "execution.py",
+            "losses.py",
+            "metrics.py",
+            "hpo_backend.py",
+            "hpo_core.py",
+            "automated_hpo.py",
+            "optimization.py",
+            "run.py",
+        }
+        files = [
+            p
+            for p in package.rglob("*.py")
+            if p.name in names or p.parent.name in ("data", "models", "semantic")
+        ]
         digest = sha256()
         for path in sorted(files):
             digest.update(path.relative_to(package).as_posix().encode())
             digest.update(path.read_bytes())
         return digest.hexdigest()
 
-    def _inspect(self, directory: Path, context: dict, budget: int | None,
-                 explicit: Path | None = None) -> dict | None:
+    def _inspect(
+        self, directory: Path, context: dict, budget: int | None, explicit: Path | None = None
+    ) -> dict | None:
         summary_path = directory / "summary.json"
         summary = read_json(summary_path) if summary_path.exists() else {}
         last_path = explicit or directory / "last.pt"
@@ -203,10 +317,18 @@ class SatelliteBackend:
             raise ValueError(f"Invalid training configuration in {path}: {error}") from error
         if summary.get("parameters") and self.normalize(summary["parameters"]) != parameters:
             raise ValueError(f"summary.json parameters disagree with checkpoint: {directory}")
-        thresholds = raw.get("thresholds", context["thresholds"] if context.get("allow_legacy_import") else None)
+        semantic = context.get("task") == SEMANTIC_TASK
+        if checkpoint.get("task") != (SEMANTIC_TASK if semantic else None):
+            raise ValueError(f"Checkpoint task differs: {path}")
+        thresholds = raw.get(
+            "thresholds", [] if semantic or context.get("allow_legacy_import") else None
+        )
         if thresholds != context["thresholds"]:
             raise ValueError(f"Threshold grid differs in {path}")
-        if checkpoint.get("precision", "fp32") != parameters["precision"] or checkpoint.get("world_size", 1) != 1:
+        if (
+            checkpoint.get("precision", "fp32") != parameters["precision"]
+            or checkpoint.get("world_size", 1) != 1
+        ):
             raise ValueError(f"Checkpoint precision/world size is incompatible: {path}")
         epoch = checkpoint.get("epoch")
         if type(epoch) is not int or epoch < 1:
@@ -236,15 +358,17 @@ class SatelliteBackend:
             # An explicitly supplied best.pt means continue FROM ITS ACTUAL epoch.
             epoch = checkpoint["epoch"]
             complete = False
-        metrics = {"f1": float(best["validation_f1"]), "iou": float(best["validation_iou"])}
+        metrics = self._metrics(best, semantic)
         if any(not math.isfinite(value) or not 0 <= value <= 1 for value in metrics.values()):
             raise ValueError(f"Invalid metrics in {path}")
         best_epoch = int(best["epoch"])
         if best_path.exists():
             best_payload = _load(best_path)
             _check_dataset(best_payload.get("config") or {}, context, best_path)
-            if (best_payload.get("model_name") != context["model_name"]
-                    or self.normalize(best_payload.get("config", {})) != parameters):
+            if (
+                best_payload.get("model_name") != context["model_name"]
+                or self.normalize(best_payload.get("config", {})) != parameters
+            ):
                 raise ValueError(f"best.pt belongs to a different configuration/seed: {directory}")
             if best_payload["epoch"] != best_epoch:
                 if best_epoch == checkpoint["epoch"]:
@@ -252,31 +376,78 @@ class SatelliteBackend:
                 else:
                     raise ValueError(f"best.pt does not match last.pt's best epoch: {directory}")
             if best_path != path and best_payload["epoch"] == best_epoch:
-                saved_best = best_payload.get("current_metrics") or best_payload.get("best_metrics", {})
+                saved_best = best_payload.get("current_metrics") or best_payload.get(
+                    "best_metrics", {}
+                )
                 for metric, value in metrics.items():
-                    saved_value = saved_best.get(f"validation_{metric}")
+                    saved_value = saved_best.get(metric if semantic else f"validation_{metric}")
                     if saved_value is None or abs(float(saved_value) - value) > 1e-8:
-                        raise ValueError(f"best.pt {metric} disagrees with last.pt metadata: {directory}")
+                        raise ValueError(
+                            f"best.pt {metric} disagrees with last.pt metadata: {directory}"
+                        )
             del best_payload
         elif best_epoch == checkpoint["epoch"]:
             best_path = path
         else:
-            raise FileNotFoundError(f"Missing best.pt for historical epoch {best_epoch}: {directory}")
+            raise FileNotFoundError(
+                f"Missing best.pt for historical epoch {best_epoch}: {directory}"
+            )
         row = {
-            "parameters": parameters, "epoch": epoch, "policy": policy, "stop_reason": reason,
-            "status": "completed" if complete else "partial", "budget_epochs": budget,
-            "run_directory": str(directory.resolve()), "run_name": checkpoint["run_name"],
+            "parameters": parameters,
+            "epoch": epoch,
+            "policy": policy,
+            "stop_reason": reason,
+            "status": "completed" if complete else "partial",
+            "budget_epochs": budget,
+            "run_directory": str(directory.resolve()),
+            "run_name": checkpoint["run_name"],
             "last_checkpoint": str(last_path.resolve()) if last_path.exists() else None,
-            "best_checkpoint": str(best_path.resolve()), "best_epoch": best_epoch,
-            "best_f1": metrics["f1"], "best_iou": metrics["iou"], "metrics": metrics,
-            "best_threshold": float(best["best_threshold"]), "model_name": context["model_name"],
-            "training_seconds": summary.get("training_seconds"), "gpu_hours": summary.get("gpu_hours"),
-            "imported_from": str(path.resolve()), "summary_path": str(summary_path.resolve()),
+            "best_checkpoint": str(best_path.resolve()),
+            "best_epoch": best_epoch,
+            **self._summary_metrics(best, semantic),
+            "metrics": metrics,
+            "model_name": context["model_name"],
+            "training_seconds": summary.get("training_seconds"),
+            "gpu_hours": summary.get("gpu_hours"),
+            "imported_from": str(path.resolve()),
+            "summary_path": str(summary_path.resolve()),
         }
         del checkpoint
         return row
 
-    def discover(self, roots: Sequence[str], checkpoints: Sequence[str], context: dict) -> list[dict]:
+    @staticmethod
+    def _metrics(best: Mapping[str, Any], semantic: bool) -> dict[str, float]:
+        if semantic:
+            score = float(best["selection_score"])
+            expected = (float(best["before_macro_f1"]) + float(best["after_macro_f1"])) / 2
+            if not math.isclose(score, expected, abs_tol=1e-12):
+                raise ValueError("Semantic selection score disagrees with per-date macro F1.")
+            return {"selection_score": score, "joint_accuracy": float(best["joint_accuracy"])}
+        return {"f1": float(best["validation_f1"]), "iou": float(best["validation_iou"])}
+
+    @classmethod
+    def _summary_metrics(cls, best: Mapping[str, Any], semantic: bool) -> dict[str, Any]:
+        if semantic:
+            return {
+                "task": SEMANTIC_TASK,
+                **cls._metrics(best, True),
+                "selected_metrics": {
+                    key: deepcopy(value)
+                    for key, value in best.items()
+                    if key.startswith(("before_", "after_"))
+                    or key
+                    in ("selection_score", "selection_rule", "joint_accuracy", "classes", "samples")
+                },
+            }
+        return {
+            "best_f1": float(best["validation_f1"]),
+            "best_iou": float(best["validation_iou"]),
+            "best_threshold": float(best["best_threshold"]),
+        }
+
+    def discover(
+        self, roots: Sequence[str], checkpoints: Sequence[str], context: dict
+    ) -> list[dict]:
         records, seen = [], set()
         for root_value in roots:
             root = Path(root_value).resolve()
@@ -286,10 +457,18 @@ class SatelliteBackend:
             protocol = read_json(protocol_path) if protocol_path.exists() else {}
             if protocol:
                 if not context.get("allow_legacy_import"):
-                    raise ValueError("Set allow_legacy_import=True to import your old experiment explicitly.")
-                if protocol.get("model") != context["model_name"] or protocol.get("thresholds") != context["thresholds"]:
+                    raise ValueError(
+                        "Set allow_legacy_import=True to import your old experiment explicitly."
+                    )
+                if (
+                    protocol.get("model") != context["model_name"]
+                    or protocol.get("thresholds") != context["thresholds"]
+                ):
                     raise ValueError(f"Legacy model/threshold protocol differs: {protocol_path}")
-                if Path(protocol["dataset_root"]).resolve() != Path(context["dataset_root"]).resolve():
+                if (
+                    Path(protocol["dataset_root"]).resolve()
+                    != Path(context["dataset_root"]).resolve()
+                ):
                     raise ValueError(f"Legacy dataset path differs: {protocol_path}")
             # A previous v3 run can also be reused from a new search_name after a
             # backend fix. Its saved context remains binding even if individual
@@ -297,9 +476,13 @@ class SatelliteBackend:
             pipeline_path = root / "pipeline_protocol.json"
             if pipeline_path.exists():
                 saved_context = read_json(pipeline_path).get("context", {})
-                if (saved_context.get("model_name") != context["model_name"]
-                        or saved_context.get("thresholds") != context["thresholds"]):
+                if (
+                    saved_context.get("model_name") != context["model_name"]
+                    or saved_context.get("thresholds") != context["thresholds"]
+                ):
                     raise ValueError(f"Pipeline model/threshold protocol differs: {pipeline_path}")
+                if saved_context.get("task") != context.get("task"):
+                    raise ValueError(f"Pipeline task differs: {pipeline_path}")
                 _check_dataset(saved_context, context, pipeline_path)
             budgets = {}
             requests = root / "requests"
@@ -309,17 +492,25 @@ class SatelliteBackend:
                     if "search_name" in request and "epochs" in request:
                         budgets[request["search_name"]] = request["epochs"]
             for current, directories, filenames in os.walk(root):
-                directories[:] = [d for d in directories if not d.startswith(".")
-                                   and d not in {"checkpoints", "operations", "__pycache__", "diagnostics"}]
+                directories[:] = [
+                    d
+                    for d in directories
+                    if not d.startswith(".")
+                    and d not in {"checkpoints", "operations", "__pycache__", "diagnostics"}
+                ]
                 path = Path(current)
-                if path.parent.name != context["model_name"] or not ({"last.pt", "best.pt"} & set(filenames)):
+                if path.parent.name != context["model_name"] or not (
+                    {"last.pt", "best.pt"} & set(filenames)
+                ):
                     continue
                 if path in seen:
                     continue
                 seen.add(path)
                 relative = path.relative_to(root)
                 request_name = relative.parts[0] if len(relative.parts) > 2 else ""
-                row = self._inspect(path, context, budgets.get(request_name, protocol.get("epochs")))
+                row = self._inspect(
+                    path, context, budgets.get(request_name, protocol.get("epochs"))
+                )
                 if row:
                     records.append(row)
         for value in checkpoints:
@@ -336,7 +527,7 @@ class SatelliteBackend:
         for name in devices:
             device = torch.device(name)
             if device.type == "cpu":
-                result[name] = {"free_mib": float("inf"), "total_mib": 0.}
+                result[name] = {"free_mib": float("inf"), "total_mib": 0.0}
                 continue
             if device.type != "cuda" or not torch.cuda.is_available():
                 raise ValueError(f"Unavailable CUDA device: {name}")
@@ -355,24 +546,40 @@ class SatelliteBackend:
             parsed = _parse_cuda_oom_message(str(error))
             allocated, requested = parsed["allocated_by_pytorch_mb"], parsed["tried_to_allocate_mb"]
             # Do not add reserved cache or OTHER processes' memory to the requirement.
-            required = allocated + requested if allocated is not None and requested is not None else None
-            return {"status": "oom", "error": str(error), "required_mib": required,
-                    "requirement_kind": "live_tensors_plus_failed_allocation_lower_bound" if required else "unknown",
-                    "parameters": job["parameters"], "target_epoch": job["target_epoch"]}
+            required = (
+                allocated + requested if allocated is not None and requested is not None else None
+            )
+            return {
+                "status": "oom",
+                "error": str(error),
+                "required_mib": required,
+                "requirement_kind": "live_tensors_plus_failed_allocation_lower_bound"
+                if required
+                else "unknown",
+                "parameters": job["parameters"],
+                "target_epoch": job["target_epoch"],
+            }
 
     def _train(self, job: dict, device_name: str, stop_file: str) -> dict:
         trainer_parameters = inspect.signature(fit_binary_change_model).parameters
         if not {"stop_file", "reset_early_stopping"}.issubset(trainer_parameters):
-            raise RuntimeError("Run scripts/install_hpo_v3.py and restart the kernel; trainer patch is missing.")
+            raise RuntimeError(
+                "Run scripts/install_hpo_v3.py and restart the kernel; trainer patch is missing."
+            )
         context = job["context"]
         parameters = deepcopy(job["parameters"])
         self.validate(parameters, context)
-        device = torch.device(device_name)
+        semantic = context.get("task") == SEMANTIC_TASK
+        score_key = "selection_score" if semantic else "validation_f1"
+        device = resolve_device(device_name)
         if device.type == "cpu":
             torch.set_num_threads(context.get("cpu_threads", 1))
         if device.type == "cuda":
             torch.cuda.set_device(device)
         seed_everything(parameters["seed"])
+        if semantic:
+            torch.backends.cuda.matmul.allow_tf32 = parameters["tf32"]
+            torch.backends.cudnn.allow_tf32 = parameters["tf32"]
         source = job.get("source")
         run_name = source["run_name"] if source else f"seed_{parameters['seed']}"
         run_dir = Path(job["directory"]) / context["model_name"] / run_name
@@ -386,7 +593,10 @@ class SatelliteBackend:
             check = _load(source_path)
             _check_dataset(check.get("config") or {}, context, source_path)
             if check["epoch"] != source["epoch"] or self.normalize(check["config"]) != parameters:
-                raise ValueError("Source checkpoint changed after plan creation. Stop the old training process first.")
+                raise ValueError(
+                    "Source checkpoint changed after plan creation. "
+                    "Stop the old training process first."
+                )
             del check
             # Best is copied FIRST; if interrupted before last is copied, retry is harmless.
             _atomic_copy(Path(source["best_checkpoint"]), local_best)
@@ -396,124 +606,236 @@ class SatelliteBackend:
         if saved is not None:
             _check_dataset(saved.get("config") or {}, context, local_last)
             source_epoch = saved["epoch"]
-            required = {"optimizer_state_dict", "scheduler_state_dict", "rng_states", "history", "early_stopping"}
+            required = {
+                "optimizer_state_dict",
+                "scheduler_state_dict",
+                "rng_states",
+                "history",
+                "early_stopping",
+            }
             missing = required - saved.keys()
             if missing:
-                raise ValueError(f"Cannot perform exact state resume; missing {sorted(missing)} in {local_last}")
-            if saved.get("world_size", 1) != 1 or saved.get("precision", "fp32") != parameters["precision"]:
+                raise ValueError(
+                    f"Cannot perform exact state resume; missing {sorted(missing)} in {local_last}"
+                )
+            if (
+                saved.get("world_size", 1) != 1
+                or saved.get("precision", "fp32") != parameters["precision"]
+            ):
                 raise ValueError("Resume world size or precision mismatch.")
             if self.normalize(saved["config"]) != parameters:
-                raise ValueError("Resume training parameters differ; do not transplant optimizer state across trials.")
+                raise ValueError(
+                    "Resume training parameters differ; do "
+                    "not transplant optimizer state across trials."
+                )
             history = saved["history"]
             if [row["epoch"] for row in history] != list(range(1, source_epoch + 1)):
                 raise ValueError("Resume requires a complete ordered history from epoch 1.")
             if len(saved["rng_states"]) != 1 or saved["rng_states"][0].get("loader") is None:
                 raise ValueError("Checkpoint lacks the shuffled training-loader RNG state.")
-            saved_best = saved.get("best_metrics") or max(history, key=lambda row: row["validation_f1"])
+            saved_best = saved.get("best_metrics") or max(history, key=lambda row: row[score_key])
             if saved_best["epoch"] == source_epoch:
                 # Repair a prior pause/crash after last.pt was committed but before best.pt.
                 _atomic_copy(local_last, local_best)
             elif not local_best.exists() or _load(local_best)["epoch"] != saved_best["epoch"]:
-                raise ValueError("Historical best checkpoint is missing or inconsistent; refusing to lose it.")
+                raise ValueError(
+                    "Historical best checkpoint is missing or inconsistent; refusing to lose it."
+                )
             reset_stopper = _policy(saved["early_stopping"]) != job["policy"]
             del saved
         else:
             history = []
         remaining = job["target_epoch"] - source_epoch
         if remaining < 0:
-            raise ValueError("Local checkpoint is beyond the requested target; refusing to truncate history.")
+            raise ValueError(
+                "Local checkpoint is beyond the requested target; refusing to truncate history."
+            )
         if Path(stop_file).exists() and remaining:
             return {"status": "paused", "epoch": source_epoch, "parameters": parameters}
         if remaining:
-            self_message = f"seed={parameters['seed']}: epoch {source_epoch} -> {job['target_epoch']} (+{remaining})"
-            print(f"[RESUME] {self_message}" if source_epoch else f"[FRESH] {self_message}", flush=True)
+            self_message = (
+                f"seed={parameters['seed']}: epoch {source_epoch} "
+                f"-> {job['target_epoch']} (+{remaining})"
+            )
+            print(
+                f"[RESUME] {self_message}" if source_epoch else f"[FRESH] {self_message}",
+                flush=True,
+            )
             if reset_stopper:
-                print("[POLICY] New phase stopping policy; optimizer, scheduler and RNG are retained.", flush=True)
-            data_options = dict(dataset_root=context["dataset_root"], image_size=parameters["image_size"],
-                                batch_size=parameters["batch_size"], num_workers=parameters["num_workers"],
-                                pin_memory=device.type == "cuda")
-            _, train_loader = create_dataset_dataloader(
-                **data_options, split="train", shuffle=True, seed=parameters["seed"],
-                transform=RandomFlipRotate(horizontal_flip_probability=.5, vertical_flip_probability=.5))
-            _, val_loader = create_dataset_dataloader(**data_options, split="val")
+                print(
+                    "[POLICY] New phase stopping policy; "
+                    "optimizer, scheduler and RNG are retained.",
+                    flush=True,
+                )
+            loss: torch.nn.Module
+            if semantic:
+                from satchange.semantic.training import SemanticCELoss, create_loaders
+
+                train_loader, val_loader = create_loaders(context["dataset_root"], parameters)
+                loss = SemanticCELoss(parameters["class_weights"]).to(device)
+            else:
+                data_options = dict(
+                    dataset_root=context["dataset_root"],
+                    image_size=parameters["image_size"],
+                    batch_size=parameters["batch_size"],
+                    num_workers=parameters["num_workers"],
+                    pin_memory=device.type == "cuda",
+                )
+                _, train_loader = create_dataset_dataloader(
+                    **data_options,
+                    split="train",
+                    shuffle=True,
+                    seed=parameters["seed"],
+                    transform=RandomFlipRotate(
+                        horizontal_flip_probability=0.5, vertical_flip_probability=0.5
+                    ),
+                )
+                _, val_loader = create_dataset_dataloader(**data_options, split="val")
+                loss = BCEDiceLoss(
+                    bce_weight=parameters["bce_weight"],
+                    dice_weight=parameters["dice_weight"],
+                    pos_weight=parameters["positive_weight"],
+                ).to(device)
             construction = deepcopy(parameters["model_parameters"])
             if source_epoch and "pretrained_backbone" in construction:
-                construction["pretrained_backbone"] = False  # Trained state is about to be restored.
-            model = create_change_model(context["model_name"], construction).to(device)
+                construction["pretrained_backbone"] = (
+                    False  # Trained state is about to be restored.
+                )
+            model = create_task_model(
+                context["model_name"], construction, context.get("task", "binary_change_detection")
+            ).to(device)
             counts = count_model_parameters(model)
-            loss = BCEDiceLoss(bce_weight=parameters["bce_weight"], dice_weight=parameters["dice_weight"],
-                               pos_weight=parameters["positive_weight"]).to(device)
-            optimizer = torch.optim.AdamW(model.parameters(), lr=parameters["learning_rate"],
-                                           weight_decay=parameters["weight_decay"])
+            optimizer = torch.optim.AdamW(
+                model.parameters(),
+                lr=parameters["learning_rate"],
+                weight_decay=parameters["weight_decay"],
+            )
             scheduler = _create_scheduler(optimizer, parameters["scheduler"])
-            config = {**parameters, "thresholds": context["thresholds"], "epochs": job["target_epoch"],
-                      "budget_epochs": job["target_epoch"], "dataset_root": context["dataset_root"],
-                      "execution_mode": "independent_hpo", "world_size": 1, "hpo_phase": job["phase"],
-                      "torch_version": str(torch.__version__), "cuda_version": torch.version.cuda}
+            config = {
+                **parameters,
+                "thresholds": context["thresholds"],
+                "epochs": job["target_epoch"],
+                "budget_epochs": job["target_epoch"],
+                "dataset_root": context["dataset_root"],
+                "execution_mode": "independent_hpo",
+                "world_size": 1,
+                "hpo_phase": job["phase"],
+                "torch_version": str(torch.__version__),
+                "cuda_version": torch.version.cuda,
+            }
+            if semantic:
+                from satchange.semantic.data import SemanticROIDataset
+
+                semantic_dataset = train_loader.dataset
+                assert isinstance(semantic_dataset, SemanticROIDataset)
+                config.pop("thresholds")
+                config["training_data"] = {
+                    "scenes": deepcopy(semantic_dataset.document["provenance"]["scenes"]),
+                    "protocol": deepcopy(semantic_dataset.document["protocol"]),
+                }
             try:
                 config["code_revision"] = subprocess.run(
-                    ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False).stdout.strip()
+                    ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
+                ).stdout.strip()
             except OSError:
                 config["code_revision"] = "unknown"
             try:
                 history = fit_binary_change_model(
-                    model=model, train_loader=train_loader, validation_loader=val_loader,
-                    loss_function=loss, optimizer=optimizer, device=device,
-                    number_of_epochs=remaining, thresholds=context["thresholds"],
-                    output_root=job["directory"], model_name=context["model_name"], run_name=run_name,
-                    checkpoint_interval=job["checkpoint_interval"], config=config,
-                    resume_from=local_last if source_epoch else None, scheduler=scheduler,
-                    precision=parameters["precision"], log_prefix=f"[{job['id']} | {device}] ",
-                    stop_file=stop_file, reset_early_stopping=reset_stopper,
-                    **_stopping_arguments(job["policy"]))
+                    model=model,
+                    train_loader=train_loader,
+                    validation_loader=val_loader,
+                    loss_function=loss,
+                    optimizer=optimizer,
+                    device=device,
+                    number_of_epochs=remaining,
+                    thresholds=context["thresholds"],
+                    output_root=job["directory"],
+                    model_name=context["model_name"],
+                    run_name=run_name,
+                    checkpoint_interval=job["checkpoint_interval"],
+                    config=config,
+                    resume_from=local_last if source_epoch else None,
+                    scheduler=scheduler,
+                    precision=parameters["precision"],
+                    log_prefix=f"[{job['id']} | {device}] ",
+                    stop_file=stop_file,
+                    reset_early_stopping=reset_stopper,
+                    task=context.get("task", "binary_change_detection"),
+                    **_stopping_arguments(job["policy"]),
+                )
             finally:
                 del model, loss, optimizer, scheduler, train_loader, val_loader
         else:
             counts = {}
-            config = {**parameters, "thresholds": context["thresholds"], "epochs": job["target_epoch"],
-                      "budget_epochs": job["target_epoch"], "dataset_root": context["dataset_root"]}
+            config = {
+                **parameters,
+                "thresholds": context["thresholds"],
+                "epochs": job["target_epoch"],
+                "budget_epochs": job["target_epoch"],
+                "dataset_root": context["dataset_root"],
+            }
         if not history:
             return {"status": "paused", "epoch": source_epoch, "parameters": parameters}
         epoch = history[-1]["epoch"]
-        best = max(history, key=lambda row: row["validation_f1"])
+        best = max(history, key=lambda row: row[score_key])
         reason = history[-1].get("stop_reason")
-        complete = epoch == job["target_epoch"] or (reason == "early_stopping" and job["policy"] is not None)
+        complete = epoch == job["target_epoch"] or (
+            reason == "early_stopping" and job["policy"] is not None
+        )
         seconds = sum(float(row.get("epoch_seconds", 0)) for row in history)
-        metrics = {"f1": float(best["validation_f1"]), "iou": float(best["validation_iou"])}
+        metrics = self._metrics(best, semantic)
         if complete:
             # A historical best may have been found in an earlier phase. Its weights,
             # optimizer, epoch and history remain unchanged, but the NEW copy belongs
             # to the current training budget. Keep the original config as provenance.
             best_payload = _load(local_best)
-            best_payload.setdefault("original_training_config", deepcopy(best_payload.get("config", {})))
-            best_payload["config"] = {**best_payload.get("config", {}),
-                                      "epochs": job["target_epoch"], "hpo_phase": job["phase"],
-                                      "budget_epochs": job["target_epoch"],
-                                      "dataset_root": context["dataset_root"]}
+            best_payload.setdefault(
+                "original_training_config", deepcopy(best_payload.get("config", {}))
+            )
+            best_payload["config"] = {
+                **best_payload.get("config", {}),
+                "epochs": job["target_epoch"],
+                "hpo_phase": job["phase"],
+                "budget_epochs": job["target_epoch"],
+                "dataset_root": context["dataset_root"],
+            }
             best_payload["training_completed_epoch"] = epoch
             best_payload["training_budget_epochs"] = job["target_epoch"]
             _save_checkpoint(local_best, best_payload)
             del best_payload
         summary = {
-            "trial": run_name, "status": "completed" if complete else "paused",
-            "epoch": epoch, "epochs_completed": epoch, "budget_epochs": job["target_epoch"],
+            "trial": run_name,
+            "status": "completed" if complete else "paused",
+            "epoch": epoch,
+            "epochs_completed": epoch,
+            "budget_epochs": job["target_epoch"],
             "stop_reason": "max_epochs" if epoch == job["target_epoch"] else reason,
             "stopped_early": complete and epoch < job["target_epoch"],
-            "early_stopping": job["policy"], "policy": job["policy"], "parameters": config,
-            "best_epoch": best["epoch"], "best_threshold": best["best_threshold"],
-            "best_f1": metrics["f1"], "best_iou": metrics["iou"], "metrics": metrics,
+            "early_stopping": job["policy"],
+            "policy": job["policy"],
+            "parameters": config,
+            "best_epoch": best["epoch"],
+            **self._summary_metrics(best, semantic),
+            "metrics": metrics,
             "best_validation_loss": best.get("validation_loss"),
-            "best_precision": best.get("validation_precision"), "best_recall": best.get("validation_recall"),
-            "training_seconds": seconds, "seconds_per_epoch": seconds / epoch,
+            "best_precision": best.get("validation_precision"),
+            "best_recall": best.get("validation_recall"),
+            "training_seconds": seconds,
+            "seconds_per_epoch": seconds / epoch,
             "timing_scope": "sum of saved epoch_seconds; not end-to-end controller wall time",
             "gpu_hours": sum(float(row.get("gpu_hours", 0)) for row in history),
             "peak_gpu_memory_mb": max(row.get("peak_gpu_memory_mb", 0) for row in history),
-            "run_directory": str(run_dir), "run_name": run_name,
-            "last_checkpoint": str(local_last), "best_checkpoint": str(local_best),
-            "model_name": context["model_name"], "device": device_name,
-            "resume_source": source["last_checkpoint"] if source else None,
-            "resumed_from_epoch": source_epoch, "new_epochs_completed": epoch - source_epoch,
-            "early_stopping_reset": reset_stopper, **counts,
+            "run_directory": str(run_dir),
+            "run_name": run_name,
+            "last_checkpoint": str(local_last),
+            "best_checkpoint": str(local_best),
+            "model_name": context["model_name"],
+            "device": device_name,
+            "resume_source": str(local_last) if source_epoch else None,
+            "resumed_from_epoch": source_epoch,
+            "new_epochs_completed": epoch - source_epoch,
+            "early_stopping_reset": reset_stopper,
+            **counts,
         }
         write_json(run_dir / "summary.json", summary)
         return {**summary, "parameters": parameters}

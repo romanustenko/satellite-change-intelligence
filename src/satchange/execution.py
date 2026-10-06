@@ -14,6 +14,21 @@ from torch.nn.parallel import DistributedDataParallel
 from torch.utils.data import DataLoader
 
 
+def resolve_device(device: str | torch.device) -> torch.device:
+    """Resolve cuda to its current visible index; never silently fall back to CPU."""
+    resolved = torch.device(device)
+    if resolved.type not in ("cpu", "cuda"):
+        raise ValueError("Use cpu, cuda, or cuda:N.")
+    if resolved.type == "cuda":
+        if not torch.cuda.is_available():
+            raise ValueError("CUDA was requested but is unavailable.")
+        index = torch.cuda.current_device() if resolved.index is None else resolved.index
+        if not 0 <= index < torch.cuda.device_count():
+            raise ValueError(f"CUDA index {index} is not visible to this process.")
+        resolved = torch.device("cuda", index)
+    return resolved
+
+
 def rank() -> int:
     """Return zero outside a process group."""
     return dist.get_rank() if dist.is_initialized() else 0

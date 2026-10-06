@@ -1,0 +1,53 @@
+# SECOND canonical IDs after exact conversion; indexed input mapping must match your copy.
+classes:
+- non-vegetated ground surface
+- tree
+- low vegetation
+- water
+- buildings
+- playgrounds
+class_ids:
+  1: non-vegetated ground surface
+  2: tree
+  3: low vegetation
+  4: water
+  5: buildings
+  6: playgrounds
+ignore_ids:
+- 0
+mask_source: ground_truth
+detector: null
+roi:
+  threshold: 0.5
+  connectivity: 8
+  context_pixels: 16
+  min_crop_size: 128
+  min_component_area: 1
+label_policy:
+  min_transition_purity: 0.8
+  min_valid_fraction: 0.8
+dropout: 0.1
+dataset:
+  name: SECOND
+  directory: data/SECOND
+  source: https://captain-whu.github.io/SCD/
+  palette_source: https://raw.githubusercontent.com/yzygit1230/SCD-SAM/main/datasets/RS_ST.py
+  split_seed: 2099
+  indexed_id_names:
+    0: non-change
+    1: water
+    2: non-vegetated ground surface
+    3: low vegetation
+    4: tree
+    5: buildings
+    6: playgrounds
+training:
+  learning_rate: 0.001
+  weight_decay: 0.0001
+  batch_size: 4
+  num_workers: 0
+  scheduler: none
+  precision: fp32
+  tf32: false
+  seed: 42
+  class_weights: null

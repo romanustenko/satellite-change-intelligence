@@ -206,7 +206,11 @@ def test_generic_yaml_training_launcher_and_collision_guard(tmp_path):
     config = load_config("configs/siam_mit_b3_diff_resized.yaml")
     config["model"]["parameters"]["encoder_depths"] = [1, 1, 1, 1]  # Launcher depth ablation.
     config["data"]["image_size"] = 32
+    config["data"]["num_workers"] = 0
+    config["data"]["batch_size"] = 1
     config["training"]["epochs"] = 1
+    config["training"]["thresholds"] = [0.5]  # Explicit validation grid for the fixture.
+    config["runtime"]["precision"] = "fp32"  # This launcher fixture runs on CPU.
     config["dataset"]["prepared_directory"] = "data"
     config["output"]["directory"] = "output"
     previous = torch.get_num_threads()
