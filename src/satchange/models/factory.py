@@ -1,6 +1,5 @@
 """Model construction utilities."""
 
-
 from typing import Any
 
 from torch import nn
@@ -8,6 +7,29 @@ from torch import nn
 from satchange.models.bit import BIT
 from satchange.models.fc_siam_diff import FCSiamDiff
 from satchange.models.siam_mit_b3_diff import SiamMiTB3Diff
+from satchange.models.tiny_siamese_change_classifier import TinySiameseChangeClassifier
+
+BINARY_TASK = "binary_change_detection"
+SEMANTIC_TASK = "semantic_roi_classification"
+
+
+def model_class_for_task(model_name: str, task: str = BINARY_TASK) -> type[nn.Module]:
+    """Select a supported task contract without registering a classifier as a detector."""
+    if task == SEMANTIC_TASK and model_name == "tiny_siamese_change_classifier":
+        return TinySiameseChangeClassifier
+    if task == BINARY_TASK and model_name in MODEL_REGISTRY:
+        return MODEL_REGISTRY[model_name]
+    raise ValueError(f"Unsupported model/task pair: {model_name}/{task}")
+
+
+def create_task_model(
+    model_name: str,
+    parameters: dict[str, Any],
+    task: str = BINARY_TASK,
+) -> nn.Module:
+    """Construct a model with an explicit detector or ROI-classifier contract."""
+    return model_class_for_task(model_name, task)(**parameters)
+
 
 MODEL_REGISTRY: dict[str, type[nn.Module]] = {
     "siam_mit_b3_diff": SiamMiTB3Diff,
@@ -39,14 +61,9 @@ def create_change_model(
 
     if model_name not in MODEL_REGISTRY:
         raise ValueError(
-            f"Unknown model: '{model_name}'. "
-            f"Available models: {tuple(MODEL_REGISTRY)}."
+            f"Unknown model: '{model_name}'. Available models: {tuple(MODEL_REGISTRY)}."
         )
 
-    model_class = MODEL_REGISTRY[
-        model_name
-    ]
+    model_class = MODEL_REGISTRY[model_name]
 
-    return model_class(
-        **parameters
-    )
+    return model_class(**parameters)

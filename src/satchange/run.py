@@ -25,6 +25,7 @@ from satchange.execution import (
     on_rank_zero,
     precision_context,
     rank,
+    resolve_device,
     seed_everything,
     world_size,
 )
@@ -60,7 +61,11 @@ def reconstruct_checkpoint(
     path: str | Path, device: torch.device
 ) -> tuple[nn.Module, dict[str, Any]]:
     """Strictly reconstruct a trusted project checkpoint, without an existing model object."""
-    state = torch.load(path, map_location=device, weights_only=False)
+    from satchange.models.factory import BINARY_TASK, create_task_model
+    device = resolve_device(device)
+    state = torch.load(path, map_location="cpu", weights_only=False)
+    if not isinstance(state, dict):
+        raise ValueError("Checkpoint must contain a project metadata mapping.")
     for key in ("model_name", "config", "model_state_dict"):
         if key not in state:
             raise ValueError(f"Checkpoint is missing {key}.")
@@ -72,7 +77,10 @@ def reconstruct_checkpoint(
         raise ValueError("Checkpoint has no model_parameters or model.parameters mapping.")
     if "model" in config and config["model"]["name"] != state["model_name"]:
         raise ValueError("Checkpoint model identity disagrees with config.")
-    model = create_change_model(state["model_name"], parameters).to(device)
+    task = state.get("task", BINARY_TASK)
+    if config.get("task", task) != task:
+        raise ValueError("Checkpoint task disagrees with config.")
+    model = create_task_model(state["model_name"], parameters, task).to(device)
     model.load_state_dict(state["model_state_dict"], strict=True)
     return model, state
 
