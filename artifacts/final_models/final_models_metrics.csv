@@ -1,0 +1,7 @@
+model,F1,IoU,source_file,json_location,f1_key,iou_key
+heavy_full,0.8728332548238615,0.7743603673185612,final_test_results.json,root.results[1],recomputed_validation_f1,recomputed_validation_iou
+medium_full,0.8609420057101751,0.7558368494195519,final_test_results.json,root.results[1],original_validation_f1,original_validation_iou
+light_full,0.8509220837957805,0.7405260094168851,final_test_results.json,root.results[2],validation_f1,validation_iou
+heavy_resized,0.775654905480451,0.6335263717333138,final_test_results.json,root.results[0],recomputed_validation_f1,recomputed_validation_iou
+light_resized,0.7567133253522423,0.6086394560342497,final_test_results.json,root.results[0],test_f1,test_iou
+medium_resized,0.7189268441898855,0.5611910927407237,final_test_results.json,root.results[1],validation_f1,validation_iou
