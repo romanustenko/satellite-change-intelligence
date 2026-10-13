@@ -107,3 +107,9 @@ artifacts/*
 
 .DS_Store
 Thumbs.db
+
+# ============================================================
+# Separate Files
+# ============================================================
+
+changes_previous_semantic_implementation.md

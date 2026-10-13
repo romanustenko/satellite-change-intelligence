@@ -16,7 +16,7 @@ class ConvBlock(nn.Module):
         super().__init__()
         # Т.к. класс присваивается модели, то super.__init__ передает автоматически такую информацию как .device , веса , парамметры и т.д.
 
-        self.layers == nn.Sequential(
+        self.layers = nn.Sequential(
             nn.Conv2d(
                 in_channels,
                 out_channels,
@@ -76,7 +76,7 @@ class SiameseEncoder(nn.Module):
             base_channels * 16,
         )
 
-        self.pool = nn.MaxPoo12d(
+        self.pool = nn.MaxPool2d(
             kernel_size=2,
             stride=2,
         )
