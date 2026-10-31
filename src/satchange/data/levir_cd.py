@@ -65,7 +65,7 @@ def download_levir_cd(
 
     if (
         not downloaded_files
-        and not any(download_dorectory.iterdir())
+        and not any(download_directory.iterdir())
     ):
         raise RuntimeError("LEVIR-CD download failed.")
 
