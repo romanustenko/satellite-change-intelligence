@@ -77,7 +77,11 @@ optional HPO identity key `initial_weights = {path, sha256, exclude}` for LEVIRâ
 (fresh start only, hash-checked, strict except excluded prefixes). Tests: `tests/test_second_binary.py`.
 Full pytest 137 passed / 3 skipped / 0 failed. **Open:** `mypy src` shows 43 errors vs 40 at HEAD
 `b72cd6c` â€” 3 new typing errors (likely `final_benchmark.py`/`run.py` after the loader return-type
-change); fix first in the next session. Next: R2-P08-T03 pilot spec (needs D-024), R2-P05-T03 notebook.
+change). **Resolved 2026-11-07:** the errors came from `final_benchmark.py:922` using
+`before_files/after_files/label_files`, which `SECONDBinaryDataset` lacked (a real `AttributeError`
+for SECOND final benchmarks, not only typing); the attributes were added with a test. `mypy src` is
+back to 40 (= HEAD baseline); full pytest 137 passed / 3 skipped / 0 failed.
+Next: R2-P08-T03 pilot spec (needs D-024), R2-P05-T03 notebook (needs D-008/D-009).
 
 ## Session handoff (2026-11-06, end of session)
 

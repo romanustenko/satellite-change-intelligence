@@ -76,6 +76,11 @@ class SECONDBinaryDataset(Dataset):
         if missing:
             raise FileNotFoundError(f"SECOND manifest files are missing, e.g. {missing[:3]}")
 
+        # LEVIRCDDataset-compatible per-sample path maps (used by final_benchmark).
+        self.before_files = {k: f["before"] for k, f in self.files.items()}
+        self.after_files = {k: f["after"] for k, f in self.files.items()}
+        self.label_files = {k: f["before_semantic"] for k, f in self.files.items()}
+
     def __len__(self) -> int:
         return len(self.sample_ids)
 

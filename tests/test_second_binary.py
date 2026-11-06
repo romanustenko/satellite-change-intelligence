@@ -58,6 +58,9 @@ def test_manifest_root_dispatches_to_second_with_levir_contract(tmp_path):
     test_split, _ = create_dataset_dataloader(root, "test", None, 1, 0)
     assert [row for row in test_split.sample_ids] == ["test/s000", "test/s001"]
     assert verify_second_sources(root) == 6 * 4
+    # final_benchmark reads native shapes through the LEVIRCDDataset path maps.
+    for files in (test_split.before_files, test_split.after_files, test_split.label_files):
+        assert sorted(files) == test_split.sample_ids and all(p.is_file() for p in files.values())
 
 
 def test_label_disagreement_missing_files_and_changed_sources_fail(tmp_path):
