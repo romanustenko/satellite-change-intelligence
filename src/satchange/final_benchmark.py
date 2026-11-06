@@ -128,8 +128,10 @@ def run_final_benchmark(
         raise ValueError("Output must not be the project/dataset root or one of their ancestors.")
     if task != "binary_change_detection":
         raise ValueError(f"Unsupported benchmark task: {task}")
+    from satchange.data.second_binary import is_second_binary_root
+
     for split in ("val", "test"):
-        if not (dataset / split).is_dir():
+        if not is_second_binary_root(dataset) and not (dataset / split).is_dir():
             raise FileNotFoundError(f"Prepared dataset split is missing: {dataset / split}")
     if (dataset / "val").resolve() == (dataset / "test").resolve():
         raise ValueError("Validation and test resolve to the same directory.")

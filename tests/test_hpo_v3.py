@@ -319,7 +319,8 @@ def test_code_identity_is_model_specific_and_line_ending_independent(tmp_path, m
     medium = backend.code_identity({"model_name": "bit"})
     assert "models/fc_siam_diff.py" in light["files"] and "models/bit.py" not in light["files"]
     assert "models/bit.py" in medium["files"]
-    assert not any(name.startswith("semantic/") for name in light["files"])
+    semantic = {name for name in light["files"] if name.startswith("semantic/")}
+    assert semantic == {"semantic/data.py", "semantic/second.py"}  # SECOND binary loader only.
     assert light["categories"]["hpo_core.py"] == "control"
     assert light["categories"]["hpo_accounting.py"] == "monitoring"
     original = Path.read_bytes

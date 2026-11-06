@@ -69,6 +69,16 @@ No Research 2 code, notebooks, datasets, training or HPO exist yet.
 - Provenance: Light training commit `7f38560` missing (F1); `02b72d7`/`81a5e53` now tagged locally (D-029).
 - HPO signature differs between CRLF and LF checkouts (F3) — input for R2-P06-T01.
 
+## Update 2026-11-06 (late) — R2-P08-T02 partial
+
+Done: `src/satchange/data/second_binary.py` (SECOND root with `second_split_manifest.json` →
+binary change detection through `create_dataset_dataloader`, HPO and `run_final_benchmark`);
+optional HPO identity key `initial_weights = {path, sha256, exclude}` for LEVIR→SECOND fine-tuning
+(fresh start only, hash-checked, strict except excluded prefixes). Tests: `tests/test_second_binary.py`.
+Full pytest 137 passed / 3 skipped / 0 failed. **Open:** `mypy src` shows 43 errors vs 40 at HEAD
+`b72cd6c` — 3 new typing errors (likely `final_benchmark.py`/`run.py` after the loader return-type
+change); fix first in the next session. Next: R2-P08-T03 pilot spec (needs D-024), R2-P05-T03 notebook.
+
 ## Session handoff (2026-11-06, end of session)
 
 **State:** committed on local branch `research2/foundation` (not pushed). Not committed on purpose:

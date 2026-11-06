@@ -54,6 +54,9 @@ TRAIN_KEYS = {
     "dice_weight",
     "precision",
 }
+# Optional identity keys: absent means the historical behaviour (scratch initialization), so
+# existing trial identities are unchanged.
+OPTIONAL_TRAIN_KEYS = {"initial_weights"}
 GENERATED_KEYS = {
     "epochs",
     "number_of_epochs",
@@ -188,7 +191,7 @@ class SatelliteBackend:
     def normalize(self, parameters: Mapping[str, Any]) -> dict[str, Any]:
         merged = _build_trial_parameters(dict(parameters), {})
         # Preserve None, zero and false. Do not silently discard unknown training controls.
-        keys = TRAIN_KEYS
+        keys = TRAIN_KEYS | OPTIONAL_TRAIN_KEYS
         unknown = set(merged) - keys - GENERATED_KEYS
         if unknown:
             raise ValueError(f"Unsupported training fields: {sorted(unknown)}")
@@ -206,6 +209,8 @@ class SatelliteBackend:
         missing = TRAIN_KEYS - parameters.keys()
         if missing:
             raise ValueError(f"Missing training parameters: {sorted(missing)}")
+        if parameters.get("initial_weights") is not None:
+            _validate_initial_weights(parameters["initial_weights"])
         name = context["model_name"]
         if name not in MODEL_REGISTRY:
             raise ValueError(f"Unknown model {name!r}; register it in MODEL_REGISTRY.")
@@ -273,7 +278,10 @@ class SatelliteBackend:
         "hpo_backend.py",
         "data/__init__.py",
         "data/levir_cd.py",
+        "data/second_binary.py",
         "data/transforms.py",
+        "semantic/data.py",
+        "semantic/second.py",
         "models/__init__.py",
         "models/factory.py",
     )
@@ -690,6 +698,10 @@ class SatelliteBackend:
                 context["model_name"], construction, context.get("task", "binary_change_detection")
             ).to(device)
             counts = count_model_parameters(model)
+            initialization = None
+            if not source_epoch and parameters.get("initial_weights") is not None:
+                # Fresh start only; a resumed run restores its own trained state below.
+                initialization = _load_initial_weights(model, parameters["initial_weights"])
             optimizer = torch.optim.AdamW(
                 model.parameters(),
                 lr=parameters["learning_rate"],
@@ -813,12 +825,59 @@ class SatelliteBackend:
             "device": device_name,
             "resume_source": str(local_last) if source_epoch else None,
             "resumed_from_epoch": source_epoch,
+            "initial_weights_report": initialization,
             "new_epochs_completed": epoch - source_epoch,
             "early_stopping_reset": reset_stopper,
             **counts,
         }
         write_json(run_dir / "summary.json", summary)
         return {**summary, "parameters": parameters}
+
+
+def _validate_initial_weights(value: Any) -> None:
+    """initial_weights = {"path": str, "sha256": 64-hex, "exclude": [state-dict key prefixes]}."""
+    if not isinstance(value, dict) or set(value) != {"path", "sha256", "exclude"}:
+        raise ValueError("initial_weights needs exactly path, sha256 and exclude.")
+    if not isinstance(value["path"], str) or not value["path"]:
+        raise ValueError("initial_weights.path must be a non-empty string.")
+    digest = value["sha256"]
+    if not isinstance(digest, str) or len(digest) != 64 or set(digest) - set("0123456789abcdef"):
+        raise ValueError("initial_weights.sha256 must be a lowercase 64-character hex digest.")
+    exclude = value["exclude"]
+    if not isinstance(exclude, list) or any(not isinstance(k, str) or not k for k in exclude):
+        raise ValueError("initial_weights.exclude must be a list of non-empty key prefixes.")
+
+
+def _load_initial_weights(model: torch.nn.Module, spec: Mapping[str, Any]) -> dict[str, Any]:
+    """Load trusted own weights (hash-checked); only explicitly excluded keys may differ."""
+    from satchange.semantic.data import file_digest
+
+    path = Path(spec["path"]).expanduser().resolve()
+    if file_digest(path) != spec["sha256"]:
+        raise ValueError(f"initial_weights SHA-256 mismatch: {path}")
+    payload = torch.load(path, map_location="cpu", weights_only=False)
+    state = payload.get("model_state_dict", payload) if isinstance(payload, dict) else None
+    if not isinstance(state, dict):
+        raise ValueError(f"initial_weights has no state_dict: {path}")
+    prefixes = tuple(spec["exclude"])
+    own = model.state_dict()
+    source = {k: v for k, v in state.items() if not k.startswith(prefixes)} if prefixes else state
+    expected = {k for k in own if not (prefixes and k.startswith(prefixes))}
+    if set(source) != expected:
+        raise ValueError(
+            "initial_weights keys differ beyond the excluded prefixes: "
+            f"missing={sorted(expected - set(source))[:5]}, "
+            f"unexpected={sorted(set(source) - expected)[:5]}"
+        )
+    for key, tensor in source.items():
+        if tuple(tensor.shape) != tuple(own[key].shape):
+            raise ValueError(f"initial_weights shape mismatch for {key}: "
+                             f"{tuple(tensor.shape)} vs {tuple(own[key].shape)}")
+    model.load_state_dict(source, strict=False)
+    return {
+        "path": str(path), "sha256": spec["sha256"], "loaded_keys": len(source),
+        "excluded_keys": sorted(set(own) - expected),
+    }
 
 
 def _atomic_copy(source: Path, destination: Path) -> None:
