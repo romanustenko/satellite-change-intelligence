@@ -1,6 +1,7 @@
 """Exact SECOND conversion and versioned preparation; never starts training on import."""
 
 import json
+import os
 import random
 import stat
 import zipfile
@@ -13,14 +14,7 @@ from uuid import uuid4
 import numpy as np
 from PIL import Image
 
-from satchange.semantic.data import (
-    SemanticROIDataset,
-    data_protocol,
-    file_digest,
-    prepare_dataset,
-    read_rgb,
-    write_json,
-)
+from satchange.semantic.data import file_digest, write_json
 
 SECOND_SOURCE = "https://captain-whu.github.io/SCD/"
 SECOND_DOWNLOAD = "https://drive.google.com/file/d/1mN8jzCKKK27p3ODGoDgepjiRYGQpB34u/view"
@@ -43,6 +37,9 @@ SECOND_COLORS = {
     (128, 0, 0): 5,
     (255, 0, 0): 6,
 }
+LOCAL_HOLDOUT_FRACTION = 0.15  # Share of official-train groups per locally created split.
+SPLIT_MANIFEST_SCHEMA = 1
+SCENE_FILES = ("before", "after", "before_semantic", "after_semantic")
 
 
 def decode_label(path: str | Path, indexed_ids: dict[int, str] | None = None) -> np.ndarray:
@@ -208,149 +205,230 @@ def bootstrap_second(
     return root
 
 
-def prepare_second(
-    root: str | Path,
-    cache: str | Path,
-    config: dict[str, Any],
-    *,
-    split_seed: int = 2099,
-    local_holdout: bool = False,
-    indexed_ids: dict[int, str] | None = None,
-    source_groups: dict[str, str] | None = None,
-    sensor_metadata: dict[str, Any] | None = None,
-) -> Path:
-    """Convert native labels once and reuse only a verified complete content/protocol cache.
-
-    Preserve provided labeled splits. Missing val/test needs explicit local_holdout; groups
-    are source metadata when supplied, otherwise filenames, with no geographic-independence
-    claim. Training seeds never alter splits. Native SECOND images must be 512x512.
-    """
-    protocol = data_protocol(config)
-    if protocol["classes"] != list(SECOND_CLASSES) or protocol["mask_source"] != "ground_truth":
-        raise ValueError(
-            "SECOND oracle preparation requires the six documented classes and GT masks."
-        )
-    expected = {str(i + 1): i for i in range(6)}
-    if protocol["class_ids"] != expected or protocol["ignore_ids"] != [0]:
-        raise ValueError("SECOND conversion uses canonical IDs 1..6 with non-change ID 0 ignored.")
+def _check_split_seed(split_seed: int) -> None:
     if type(split_seed) is not int or split_seed < 0:
         raise ValueError("split_seed must be a fixed nonnegative integer.")
-    splits = discover_second(root)
-    scenes = [deepcopy(scene) for rows in splits.values() for scene in rows]
+
+
+def _apply_source_groups(
+    scenes: list[dict[str, str]], source_groups: dict[str, str] | None
+) -> None:
+    """Replace filename groups by supplied source metadata (sample_id -> group); in place."""
+    if source_groups is None:
+        return
     for scene in scenes:
-        if source_groups is not None:
-            if scene["sample_id"] not in source_groups:
-                raise ValueError(f"Missing source group: {scene['sample_id']}")
-            scene["group_id"] = source_groups[scene["sample_id"]]
-    missing = [split for split in ("val", "test") if not splits.get(split)]
-    if missing:
-        if not local_holdout:
+        if scene["sample_id"] not in source_groups:
+            raise ValueError(f"Missing source group: {scene['sample_id']}")
+        scene["group_id"] = source_groups[scene["sample_id"]]
+
+
+def _assign_local_holdout(
+    scenes: list[dict[str, str]], fractions: dict[str, float], split_seed: int
+) -> None:
+    """Move whole official-train groups into the missing splits; in place, seed-determined.
+
+    fractions maps each missing split to its share of train groups. One seeded shuffle of the
+    sorted group IDs is cut in mapping order; each split receives max(1, int(n * fraction)).
+    """
+    groups = sorted({scene["group_id"] for scene in scenes if scene["split"] == "train"})
+    if len(groups) < len(fractions) + 1:
+        raise ValueError("Too few source groups for disjoint local train/val/test.")
+    random.Random(split_seed).shuffle(groups)
+    assignments: dict[str, str] = {}
+    offset = 0
+    for split, fraction in fractions.items():
+        count = max(1, int(len(groups) * fraction))
+        assignments.update(dict.fromkeys(groups[offset : offset + count], split))
+        offset += count
+    if offset >= len(groups):
+        raise ValueError("Local holdout would leave no training groups; lower the fractions.")
+    for scene in scenes:
+        if scene["split"] == "train":
+            scene["split"] = assignments.get(scene["group_id"], "train")
+
+
+def _manifest_digest(content: dict[str, Any]) -> str:
+    canonical = json.dumps(content, sort_keys=True, separators=(",", ":"), allow_nan=False)
+    return sha256(canonical.encode("utf-8")).hexdigest()
+
+
+def _write_json_atomic(path: Path, value: Any) -> None:
+    """Commit JSON atomically on the same filesystem; a failed write leaves no partial file."""
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(f".{path.name}.{uuid4().hex}.tmp")
+    try:
+        with temporary.open("w", encoding="utf-8", newline="\n") as handle:
+            json.dump(value, handle, indent=2, sort_keys=True, allow_nan=False)
+            handle.write("\n")
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(temporary, path)
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def _holdout_fraction(name: str, value: float | None) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int | float) or not 0 < value < 1:
+        raise ValueError(f"{name} must be a fraction strictly between 0 and 1: {value!r}")
+    return float(value)
+
+
+def _relative_posix(path: str, root: Path) -> str:
+    try:
+        return Path(path).relative_to(root).as_posix()
+    except ValueError:
+        return Path(path).as_posix()
+
+
+def prepare_second_splits(
+    root: str | Path,
+    destination: str | Path,
+    *,
+    split_seed: int,
+    val_fraction: float | None = None,
+    test_fraction: float | None = None,
+    allow_missing_test: bool = False,
+    source_groups: dict[str, str] | None = None,
+) -> dict[str, Any]:
+    """Write a persistent SECOND split manifest; no ROI crops, label conversion or model config.
+
+    Official labeled splits are always preserved, and a missing one is an error unless the
+    policy is explicit: val_fraction / test_fraction carve that share of official-train groups
+    into the split (whole groups, one seeded shuffle, val before test: the prepare_second
+    local_holdout rule), allow_missing_test records that no labeled test exists. A fraction for
+    a split the release already provides is rejected. Groups are filenames unless source_groups
+    (sample_id -> group) is supplied; filename groups claim no geographic independence, while
+    supplied groups must not span splits. An existing manifest is never replaced: identical
+    content is returned, different content fails. Diagnostics report, but do not repair, shared
+    filename stems and byte-identical RGB pairs across splits. Returns the manifest.
+    """
+    _check_split_seed(split_seed)
+    shares = {
+        "val": _holdout_fraction("val_fraction", val_fraction),
+        "test": _holdout_fraction("test_fraction", test_fraction),
+    }
+    if sum(share or 0.0 for share in shares.values()) >= 1:
+        raise ValueError("val_fraction + test_fraction must leave training groups.")
+    if allow_missing_test and shares["test"] is not None:
+        raise ValueError("allow_missing_test and test_fraction are mutually exclusive.")
+    root = Path(root).resolve()
+    destination = Path(destination).resolve()
+    splits = discover_second(root)
+    policy: dict[str, Any] = {"val_fraction": shares["val"], "test_fraction": shares["test"]}
+    fractions: dict[str, float] = {}
+    for split, share in shares.items():
+        if splits.get(split):
+            if share is not None:
+                raise ValueError(
+                    f"Official labeled {split} exists; {split}_fraction must stay None "
+                    "(official splits are never overridden)."
+                )
+            policy[split] = "official"
+        elif share is not None:
+            fractions[split] = share
+            policy[split] = "local_holdout"
+        elif split == "test" and allow_missing_test:
+            policy[split] = "unavailable"
+        else:
+            hint = " or allow_missing_test=True" if split == "test" else ""
             raise ValueError(
-                f"SECOND labeled {missing} unavailable; explicitly enable local_holdout."
+                f"SECOND labeled {split} unavailable; pass {split}_fraction explicitly{hint}."
             )
-        groups = sorted({scene["group_id"] for scene in scenes if scene["split"] == "train"})
-        if len(groups) < len(missing) + 1:
-            raise ValueError("Too few source groups for disjoint local train/val/test.")
-        random.Random(split_seed).shuffle(groups)
-        count = max(1, int(len(groups) * 0.15))
-        assignments = {}
-        for index, split in enumerate(missing):
-            assignments.update(dict.fromkeys(groups[index * count : (index + 1) * count], split))
+    scenes = [deepcopy(scene) for rows in splits.values() for scene in rows]
+    _apply_source_groups(scenes, source_groups)
+    origin = {scene["sample_id"]: scene["split"] for scene in scenes}
+    if fractions:
+        _assign_local_holdout(scenes, fractions, split_seed)
+    if source_groups is not None:
+        owner: dict[str, str] = {}
         for scene in scenes:
-            if scene["split"] == "train":
-                scene["split"] = assignments.get(scene["group_id"], "train")
-    hashes = {
-        scene[key]: file_digest(Path(scene[key]))
-        for scene in scenes
-        for key in ("before", "after", "before_semantic", "after_semantic")
-    }
-    identity = {
-        "adapter_schema": 1,
-        "protocol": protocol,
-        "sources": hashes,
-        "scenes": scenes,
-        "split_seed": split_seed,
-        "local_splits": missing,
-        "indexed_ids": indexed_ids,
-        "sensor_metadata": sensor_metadata,
-        "palette_source": PALETTE_SOURCE,
-    }
-    key = sha256(json.dumps(identity, sort_keys=True).encode()).hexdigest()
-    cache = Path(cache).resolve()
-    destination = cache / key
-    marker = destination / "complete.json"
-    prepared = destination / "rois/prepared.json"
-    if marker.is_file():
-        completion = json.loads(marker.read_text(encoding="utf-8"))
-        if completion.get("identity") != key or completion.get("prepared_sha256") != file_digest(
-            prepared
-        ):
-            raise ValueError(f"SECOND cache completion identity corrupted: {destination}")
-        SemanticROIDataset(prepared, "train", config).verify_sources()
-        return prepared
-    if destination.exists():
-        raise ValueError(
-            f"Incomplete SECOND cache: {destination}; preserve it and choose another cache."
-        )
-    cache.mkdir(parents=True, exist_ok=True)
-    stage = cache / f".{key}.incomplete-{uuid4().hex}"
-    (stage / "maps").mkdir(parents=True)
-    converted = []
-    for index, scene in enumerate(scenes):
-        left, right = (
-            decode_label(scene[k], indexed_ids) for k in ("before_semantic", "after_semantic")
-        )
-        if left.shape != (512, 512) or right.shape != left.shape:
-            raise ValueError(f"SECOND requires native 512x512 labels: {scene['sample_id']}")
-        if any(read_rgb(scene[k]).shape != (3, 512, 512) for k in ("before", "after")):
-            raise ValueError(f"SECOND requires aligned native 512x512 RGB: {scene['sample_id']}")
-        if not np.array_equal(left > 0, right > 0):
-            raise ValueError(f"Inconsistent before/after change support: {scene['sample_id']}")
-        row = dict(scene)
-        for field, array in (
-            ("before_semantic", left),
-            ("after_semantic", right),
-            ("change", (left > 0).astype(np.float32)),
-        ):
-            filename = f"maps/{index:06d}_{field}.npy"
-            np.save(stage / filename, array, allow_pickle=False)
-            # Final absolute paths survive the atomic staging rename.
-            row[field] = str(destination / filename)
-        converted.append(row)
-    # Build against staging paths, then publish source paths to the final immutable directory.
-    staging_scenes = [
-        {
-            **row,
-            **{
-                k: str(stage / Path(row[k]).relative_to(destination))
-                for k in ("before_semantic", "after_semantic", "change")
+            if owner.setdefault(scene["group_id"], scene["split"]) != scene["split"]:
+                raise ValueError(
+                    f"Source group {scene['group_id']!r} spans splits {owner[scene['group_id']]!r}"
+                    f" and {scene['split']!r}; official splits are not group-disjoint."
+                )
+    samples: dict[str, dict[str, Any]] = {
+        scene["sample_id"]: {
+            "split": scene["split"],
+            "origin_split": origin[scene["sample_id"]],
+            "group_id": scene["group_id"],
+            "files": {
+                key: {
+                    "path": _relative_posix(scene[key], root),
+                    "sha256": file_digest(Path(scene[key])),
+                }
+                for key in SCENE_FILES
             },
         }
-        for row in converted
-    ]
-    write_json(stage / "manifest.json", {"scenes": staging_scenes})
-    doc = prepare_dataset(config, stage / "manifest.json", stage / "rois")
-    encoded = json.dumps(doc).replace(
-        str(stage).replace("\\", "\\\\"), str(destination).replace("\\", "\\\\")
-    )
-    doc = json.loads(encoded)
-    doc["second"] = {
-        **identity,
+        for scene in sorted(scenes, key=lambda item: item["sample_id"])
+    }
+    members = {
+        split: [name for name, sample in samples.items() if sample["split"] == split]
+        for split in ("train", "val", "test")
+    }
+    stem_origins: dict[str, set[str]] = {}
+    for sample_id, split in origin.items():
+        stem_origins.setdefault(sample_id.split("/", 1)[1], set()).add(split)
+    # Byte-identical RGB pairs (either temporal order) under different names are invisible to
+    # filename groups; reported, never silently accepted as independent.
+    pair_members: dict[tuple[str, ...], list[str]] = {}
+    for name, sample in samples.items():
+        digests = sorted(sample["files"][key]["sha256"] for key in ("before", "after"))
+        pair_members.setdefault(tuple(digests), []).append(name)
+    content = {
+        "schema_version": SPLIT_MANIFEST_SCHEMA,
+        "kind": "second_split_manifest",
         "source": SECOND_SOURCE,
-        "checksum_is_local": True,
+        "split_seed": split_seed,
+        "policy": policy,
         "group_basis": "source metadata" if source_groups else "filename only",
         "geographic_independence_verified": False,
-        "change_support": "both labels non-white, checked equal; same-class retained",
-    }
-    write_json(stage / "rois/prepared.json", doc)
-    write_json(stage / "manifest.json", {"scenes": converted})
-    write_json(
-        stage / "complete.json",
-        {
-            "identity": key,
-            "prepared_sha256": file_digest(stage / "rois/prepared.json"),
-            "complete": True,
+        "official_leaves": sorted(splits),
+        "official_counts": {split: len(splits.get(split, [])) for split in members},
+        "counts": {split: len(ids) for split, ids in members.items()},
+        "group_counts": {
+            split: len({samples[name]["group_id"] for name in ids})
+            for split, ids in members.items()
         },
-    )
-    stage.rename(destination)
-    return prepared
+        "splits": members,
+        "samples": samples,
+        "diagnostics": {
+            "stems_shared_across_official_splits": sorted(
+                stem for stem, origins in stem_origins.items() if len(origins) > 1
+            ),
+            "identical_rgb_pairs_across_splits": sorted(
+                sorted(names)
+                for names in pair_members.values()
+                if len({samples[name]["split"] for name in names}) > 1
+            ),
+        },
+    }
+    manifest = {**content, "manifest_sha256": _manifest_digest(content)}
+    if destination.exists():
+        existing = read_second_split_manifest(destination)
+        if existing["manifest_sha256"] != manifest["manifest_sha256"]:
+            raise FileExistsError(
+                f"A different SECOND split manifest exists: {destination}; manifests are "
+                "frozen, so preserve it and choose another destination."
+            )
+        return existing
+    _write_json_atomic(destination, manifest)
+    return manifest
+
+
+def read_second_split_manifest(path: str | Path) -> dict[str, Any]:
+    """Load a split manifest and verify its schema and content digest."""
+    path = Path(path)
+    manifest = json.loads(path.read_text(encoding="utf-8"))
+    if (
+        not isinstance(manifest, dict)
+        or manifest.get("kind") != "second_split_manifest"
+        or manifest.get("schema_version") != SPLIT_MANIFEST_SCHEMA
+    ):
+        raise ValueError(f"Not a supported SECOND split manifest: {path}")
+    content = {key: value for key, value in manifest.items() if key != "manifest_sha256"}
+    if manifest.get("manifest_sha256") != _manifest_digest(content):
+        raise ValueError(f"SECOND split manifest digest mismatch (edited or corrupted): {path}")
+    return manifest

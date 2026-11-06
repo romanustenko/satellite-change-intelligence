@@ -40,11 +40,11 @@ Gloo и безопасные notebooks. Итог: **68 passed, 2 skipped, 1 warn
 | `configs/siam_mit_b3_diff_resized.yaml` | Whole-scene resize 256, полный B3, scratch FP32 |
 | `configs/siam_mit_b3_diff_full_resolution.yaml` | Native `image_size: null`, полный B3, checkpointing включён |
 | `configs/siam_mit_b3_diff_search.json` | Исполняемый пример HPO с архитектурными и связанными loss-кандидатами |
-| `notebooks/03_heavy.ipynb` | Безопасный CPU smoke и guarded experiment lifecycle |
-| `notebooks/02_bit.ipynb` | Seed внутри tiny-overfit guard, уникальная директория, подготовка данных остаётся в отдельном data guard |
+| `notebooks/research_1/03_heavy.ipynb` | Безопасный CPU smoke и guarded experiment lifecycle |
+| `notebooks/research_1/02_bit.ipynb` | Seed внутри tiny-overfit guard, уникальная директория, подготовка данных остаётся в отдельном data guard |
 | `tests/test_heavy.py` | Conformance, attention reference, gradients, fit/resume/HPO, opt-in CUDA probes |
 | `tests/test_execution.py` | Gloo coordination, preprocessing, launcher и Light/BIT checkpoint regressions |
-| `tests/test_notebooks.py` | nbformat, IPython-aware syntax и свежий kernel Heavy из `notebooks/` |
+| `tests/test_notebooks.py` | nbformat, IPython-aware syntax и свежий kernel Heavy из `notebooks/research_1/` |
 | `docs/heavy_model.md` | Этот отчёт и команды запуска |
 
 Light/BIT модели, их численные конфигурации, historical artifacts, datasets и
@@ -318,7 +318,7 @@ notebook cells без id; старые notebooks не переформатиро
 Focused Ruff и mypy:
 
 ```powershell
-.\.venv\Scripts\python -m ruff check src/satchange/models/siam_mit_b3_diff.py src/satchange/models/factory.py src/satchange/models/__init__.py src/satchange/execution.py src/satchange/run.py src/satchange/training.py src/satchange/optimization.py tests/test_heavy.py tests/test_execution.py tests/test_notebooks.py notebooks/03_heavy.ipynb
+.\.venv\Scripts\python -m ruff check src/satchange/models/siam_mit_b3_diff.py src/satchange/models/factory.py src/satchange/models/__init__.py src/satchange/execution.py src/satchange/run.py src/satchange/training.py src/satchange/optimization.py tests/test_heavy.py tests/test_execution.py tests/test_notebooks.py notebooks/research_1/03_heavy.ipynb
 .\.venv\Scripts\python -m mypy src/satchange/models/siam_mit_b3_diff.py src/satchange/models/factory.py src/satchange/models/__init__.py src/satchange/execution.py src/satchange/run.py src/satchange/training.py src/satchange/optimization.py
 ```
 
@@ -339,11 +339,11 @@ Repository-wide Ruff: **17 существующих ошибок** (было 18;
 | `01_fc_siam_diff.ipynb` | nbformat, IPython-aware compilation, полный safe fresh-kernel execution на CPU; чтение существующих summaries | Data preparation и HPO guards |
 | `02_fc_siam_diff_full_hpo.ipynb` | То же, включая чтение существующих summaries | Native HPO/data guards |
 | `02_bit.ipynb` | То же, CPU factory и synthetic forward | Подготовка данных/tiny-overfit |
-| `03_heavy.ipynb` | То же, полный default-depth CPU forward; запуск из root и отдельно из notebooks/ | Data, CUDA probe, tiny-overfit, training, HPO, checkpoint inspection, final test |
+| `03_heavy.ipynb` | То же, полный default-depth CPU forward; запуск из root и отдельно из notebooks/research_1/ | Data, CUDA probe, tiny-overfit, training, HPO, checkpoint inspection, final test |
 
 Проверки legacy notebooks выполнялись отдельным nbclient script с новым kernel
 на `.venv` interpreter для каждого файла. Heavy повторно выполнен автоматическим
-`test_notebooks.py` из каталога notebooks/. Исполненные outputs не сохранялись
+`test_notebooks.py` из каталога notebooks/research_1/. Исполненные outputs не сохранялись
 в пользовательские notebooks. Никакие production checkpoints не загружались.
 
 Единственные практические ограничения приёмки — отсутствие CUDA/NCCL/A100 и

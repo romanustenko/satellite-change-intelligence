@@ -32,7 +32,6 @@ from satchange.execution import resolve_device
 from satchange.losses import BCEDiceLoss
 from satchange.models.factory import (
     BINARY_TASK,
-    SEMANTIC_TASK,
     count_model_parameters,
     create_task_model,
     model_class_for_task,
@@ -187,25 +186,6 @@ def _create_scheduler(
 def _format_trial_parameters(parameters: dict[str, Any]) -> str:
     """Return training and resolved architecture parameters as one compact line."""
 
-    if parameters.get("task") == SEMANTIC_TASK:
-        return " | ".join(
-            [
-                f"task={SEMANTIC_TASK}",
-                *[
-                    f"{key}={parameters.get(key)}"
-                    for key in (
-                        "seed",
-                        "learning_rate",
-                        "weight_decay",
-                        "batch_size",
-                        "scheduler",
-                        "precision",
-                        "tf32",
-                    )
-                ],
-                f"dropout={parameters['model_parameters']['dropout']}",
-            ]
-        )
     return " | ".join(
         [
             f"seed={parameters.get('seed')}",
@@ -262,10 +242,6 @@ _RESUME_TRAINING_KEYS = {
 
 def _resume_parameters(parameters: dict[str, Any]) -> dict[str, Any]:
     keys = _RESUME_TRAINING_KEYS
-    if parameters.get("task", BINARY_TASK) == SEMANTIC_TASK:
-        keys = {"task", "model_parameters", "semantic_config", "prepared_identity", "class_weights",
-                "seed", "batch_size", "num_workers", "learning_rate", "weight_decay", "scheduler",
-                "precision", "tf32"}
     values = {key: parameters[key] for key in keys if key in parameters}
     values.setdefault("precision", "fp32")
     # JSON normalizes tuple/list architecture and loss parameters consistently.
@@ -280,22 +256,17 @@ def read_hpo_checkpoint(
     """Validate a full checkpoint before reusing its trajectory, not just its weights."""
     state = load_training_checkpoint(path)
     saved = state.get("config")
-    semantic = isinstance(saved, dict) and saved.get("task") == SEMANTIC_TASK
-    if not isinstance(saved, dict) or (not semantic and
-            (_RESUME_TRAINING_KEYS - {"precision"}) - saved.keys()):
+    if not isinstance(saved, dict) or (_RESUME_TRAINING_KEYS - {"precision"}) - saved.keys():
         raise ValueError(f"Checkpoint has no complete HPO parameters: {path}")
-    if semantic:
-        from satchange.semantic.training import validate_parameters
-        validate_parameters(saved)
-        if state.get("task") != SEMANTIC_TASK or thresholds:
-            raise ValueError("Semantic checkpoint task/threshold contract mismatch.")
+    if state.get("task", BINARY_TASK) != BINARY_TASK:
+        raise ValueError(f"Unsupported checkpoint task {state.get('task')!r}: {path}")
     if state.get("model_name") != model_name or state.get("world_size", 1) != 1:
         raise ValueError(f"Checkpoint model/world size differs from this independent HPO: {path}")
     if parameters is not None and _resume_parameters(saved) != _resume_parameters(parameters):
         raise ValueError(f"Checkpoint training parameters differ from the requested trial: {path}")
     if state.get("precision", "fp32") != saved.get("precision", "fp32"):
         raise ValueError(f"Checkpoint precision metadata is inconsistent: {path}")
-    if not semantic and saved.get("thresholds", state.get("thresholds")) != list(thresholds):
+    if saved.get("thresholds", state.get("thresholds")) != list(thresholds):
         raise ValueError(f"Checkpoint validation thresholds differ: {path}")
     if "dataset_root" in saved:
         if Path(saved["dataset_root"]).resolve() != Path(dataset_root).resolve():
@@ -311,9 +282,7 @@ def read_hpo_checkpoint(
         raise ValueError(f"Checkpoint exceeds the target budget or has incomplete history: {path}")
     if not state.get("rng_states"):
         raise ValueError(f"Checkpoint has no RNG/loader state for continuation: {path}")
-    expected_best = max(
-        history, key=lambda row: row["selection_score" if semantic else "validation_f1"]
-    )
+    expected_best = max(history, key=lambda row: row["validation_f1"])
     if state.get("best_metrics", {}).get("epoch") != expected_best["epoch"]:
         raise ValueError(f"Checkpoint best epoch disagrees with history: {path}")
     stopper = EarlyStopping(
@@ -407,8 +376,9 @@ def _run_single_trial(
 ) -> dict[str, Any]:
     """Run one independent training trial, optionally with early stopping."""
     task = parameters.get("task", BINARY_TASK)
-    semantic = task == SEMANTIC_TASK
-    score_key = "selection_score" if semantic else "validation_f1"
+    if task != BINARY_TASK:
+        raise ValueError(f"Unsupported trial task: {task}")
+    score_key = "validation_f1"
     early_stopping = EarlyStopping(patience, min_epochs, min_delta, monitor=score_key)
     early_stopping.validate_budget(number_of_epochs)
 
@@ -423,9 +393,6 @@ def _run_single_trial(
     device = resolve_device(f"cuda:{gpu_id}")
     if device.type == "cuda":
         torch.cuda.set_device(device)
-    if semantic:
-        torch.backends.cuda.matmul.allow_tf32 = parameters["tf32"]
-        torch.backends.cudnn.allow_tf32 = parameters["tf32"]
 
     print(
         f"[Trial {trial_number:03d} | GPU {gpu_id}] "
@@ -446,52 +413,47 @@ def _run_single_trial(
     torch.manual_seed(seed)
     torch.cuda.manual_seed_all(seed)
 
-    if semantic:
-        from satchange.semantic.training import create_loaders, validate_parameters
-        validate_parameters(parameters)
-        train_loader, validation_loader = create_loaders(dataset_root, parameters)
-    else:
-        training_transform = RandomFlipRotate(
-            horizontal_flip_probability=0.5,
-            vertical_flip_probability=0.5,
-        )
+    training_transform = RandomFlipRotate(
+        horizontal_flip_probability=0.5,
+        vertical_flip_probability=0.5,
+    )
 
-        _, train_loader = (
-            create_dataset_dataloader(
-                dataset_root=dataset_root,
-                split="train",
-                image_size=parameters[
-                    "image_size"
-                ],
-                batch_size=parameters[
-                    "batch_size"
-                ],
-                num_workers=parameters[
-                    "num_workers"
-                ],
-                transform=training_transform,
-                shuffle=True,
-                pin_memory=True,
-                seed=seed,
-            )
+    _, train_loader = (
+        create_dataset_dataloader(
+            dataset_root=dataset_root,
+            split="train",
+            image_size=parameters[
+                "image_size"
+            ],
+            batch_size=parameters[
+                "batch_size"
+            ],
+            num_workers=parameters[
+                "num_workers"
+            ],
+            transform=training_transform,
+            shuffle=True,
+            pin_memory=True,
+            seed=seed,
         )
+    )
 
-        _, validation_loader = (
-            create_dataset_dataloader(
-                dataset_root=dataset_root,
-                split="val",
-                image_size=parameters[
-                    "image_size"
-                ],
-                batch_size=parameters[
-                    "batch_size"
-                ],
-                num_workers=parameters[
-                    "num_workers"
-                ],
-                pin_memory=True,
-            )
+    _, validation_loader = (
+        create_dataset_dataloader(
+            dataset_root=dataset_root,
+            split="val",
+            image_size=parameters[
+                "image_size"
+            ],
+            batch_size=parameters[
+                "batch_size"
+            ],
+            num_workers=parameters[
+                "num_workers"
+            ],
+            pin_memory=True,
         )
+    )
 
     model = create_task_model(
         model_name=model_name, task=task,
@@ -500,41 +462,28 @@ def _run_single_trial(
         ],
     ).to(device)
 
-    if semantic:
-        from satchange.semantic.data import SemanticROIDataset
-        assert isinstance(train_loader.dataset, SemanticROIDataset)
-        parameters["training_data"] = {
-            "scenes": [{key: row[key] for key in ("sample_id", "group_id", "split", "rgb_hashes")}
-                       for row in train_loader.dataset.document["provenance"]["scenes"]],
-            "protocol": train_loader.dataset.document["protocol"],
-        }
     parameters["code_revision"] = subprocess.run(
         ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
     ).stdout.strip()
     parameters["torch_version"] = str(torch.__version__)
     parameters["cuda_version"] = torch.version.cuda
-    if not semantic:
-        parameters["thresholds"] = list(thresholds)
+    parameters["thresholds"] = list(thresholds)
     parameters["dataset_root"] = str(Path(dataset_root).resolve())
     parameters["budget_epochs"] = number_of_epochs
     parameter_counts = count_model_parameters(model)
 
     loss_function: torch.nn.Module
-    if semantic:
-        from satchange.semantic.training import SemanticCELoss
-        loss_function = SemanticCELoss(parameters["class_weights"]).to(device)
-    else:
-        loss_function = BCEDiceLoss(
-            bce_weight=parameters[
-                "bce_weight"
-            ],
-            dice_weight=parameters[
-                "dice_weight"
-            ],
-            pos_weight=parameters[
-                "positive_weight"
-            ],
-        ).to(device)
+    loss_function = BCEDiceLoss(
+        bce_weight=parameters[
+            "bce_weight"
+        ],
+        dice_weight=parameters[
+            "dice_weight"
+        ],
+        pos_weight=parameters[
+            "positive_weight"
+        ],
+    ).to(device)
 
     optimizer = torch.optim.AdamW(
         model.parameters(),
@@ -647,29 +596,6 @@ def _run_single_trial(
         "best_epoch": (best_result["epoch"]),
         **(
             {
-                "task": task,
-                "selection_score": best_result[score_key],
-                "best_validation_loss": best_result["validation_loss"],
-                "selected_metrics": {
-                    key: best_result[key]
-                    for key in (
-                        "before_macro_f1",
-                        "after_macro_f1",
-                        "before_accuracy",
-                        "after_accuracy",
-                        "joint_accuracy",
-                        "before_confusion",
-                        "after_confusion",
-                        "before_per_class",
-                        "after_per_class",
-                        "selection_rule",
-                        "classes",
-                        "samples",
-                    )
-                },
-            }
-            if semantic
-            else {
                 "best_threshold": (best_result["best_threshold"]),
                 "best_validation_loss": (best_result["validation_loss"]),
                 "best_precision": (best_result["validation_precision"]),
@@ -1090,9 +1016,9 @@ def run_parameter_search(
     """
     search_trials = _expand_search_space(search_space)
     task = _build_trial_parameters(fixed_parameters, search_trials[0]).get("task", BINARY_TASK)
-    semantic = task == SEMANTIC_TASK
-    early_stopping = EarlyStopping(patience, min_epochs, min_delta,
-                                  monitor="selection_score" if semantic else "validation_f1")
+    if task != BINARY_TASK:
+        raise ValueError(f"Unsupported search task: {task}")
+    early_stopping = EarlyStopping(patience, min_epochs, min_delta, monitor="validation_f1")
     early_stopping.validate_budget(number_of_epochs)
     if type(resume_incomplete) is not bool:
         raise ValueError("resume_incomplete must be a boolean.")
@@ -1129,10 +1055,6 @@ def run_parameter_search(
             "learning_rate", "weight_decay", "scheduler", "positive_weight",
             "bce_weight", "dice_weight", "precision", "execution_mode",
         }
-        if semantic:
-            from satchange.semantic.training import validate_parameters
-            validate_parameters(parameters)
-            allowed_training = set(_resume_parameters(parameters)) | {"execution_mode"}
         unknown_training = parameters.keys() - allowed_training
         if unknown_training:
             raise ValueError(f"Unsupported trial parameters: {sorted(unknown_training)}")
@@ -1408,12 +1330,8 @@ def run_parameter_search(
                             f"total={result['total_parameters']:,} | "
                             f"trainable={result['trainable_parameters']:,}",
                         )
-                        if semantic:
-                            print("Selection score:", f"{result['selection_score']:.6f}")
-                        else:
-                            print("F1:", f"{result['best_f1']:.6f}")
-                        if not semantic:
-                            print("IoU:", f"{result['best_iou']:.6f}")
+                        print("F1:", f"{result['best_f1']:.6f}")
+                        print("IoU:", f"{result['best_iou']:.6f}")
                         print(
                             "Epochs:",
                             f"{result['epochs_completed']}/{result['budget_epochs']} "
@@ -1565,7 +1483,7 @@ def run_parameter_search(
             executor.shutdown(wait=True)
 
     results.sort(
-        key=lambda result: result["selection_score" if semantic else "best_f1"],
+        key=lambda result: result["best_f1"],
         reverse=True,
     )
 

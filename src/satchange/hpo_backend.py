@@ -26,10 +26,11 @@ from satchange.execution import resolve_device, seed_everything
 from satchange.hpo_core import canonical, read_json, write_json
 from satchange.losses import BCEDiceLoss
 from satchange.models.factory import (
+    BINARY_TASK,
     MODEL_REGISTRY,
-    SEMANTIC_TASK,
     count_model_parameters,
     create_task_model,
+    model_class_for_task,
 )
 from satchange.optimization import (
     _build_trial_parameters,
@@ -51,21 +52,6 @@ TRAIN_KEYS = {
     "positive_weight",
     "bce_weight",
     "dice_weight",
-    "precision",
-}
-SEMANTIC_TRAIN_KEYS = {
-    "task",
-    "semantic_config",
-    "prepared_identity",
-    "class_weights",
-    "tf32",
-    "seed",
-    "model_parameters",
-    "batch_size",
-    "num_workers",
-    "learning_rate",
-    "weight_decay",
-    "scheduler",
     "precision",
 }
 GENERATED_KEYS = {
@@ -202,7 +188,7 @@ class SatelliteBackend:
     def normalize(self, parameters: Mapping[str, Any]) -> dict[str, Any]:
         merged = _build_trial_parameters(dict(parameters), {})
         # Preserve None, zero and false. Do not silently discard unknown training controls.
-        keys = SEMANTIC_TRAIN_KEYS if merged.get("task") == SEMANTIC_TASK else TRAIN_KEYS
+        keys = TRAIN_KEYS
         unknown = set(merged) - keys - GENERATED_KEYS
         if unknown:
             raise ValueError(f"Unsupported training fields: {sorted(unknown)}")
@@ -217,22 +203,6 @@ class SatelliteBackend:
     def validate(self, parameters: dict, context: dict) -> None:
         if torch.distributed.is_initialized() or int(os.environ.get("WORLD_SIZE", "1")) > 1:
             raise ValueError("Independent HPO cannot run inside torchrun/DDP.")
-        if context.get("task") == SEMANTIC_TASK:
-            from satchange.semantic.data import file_digest
-            from satchange.semantic.training import validate_parameters
-
-            if context["model_name"] != "tiny_siamese_change_classifier":
-                raise ValueError("The semantic task requires tiny_siamese_change_classifier.")
-            validate_parameters(parameters)
-            prepared = Path(context["dataset_root"])
-            prepared = prepared / "prepared.json" if prepared.is_dir() else prepared
-            if file_digest(prepared) != parameters["prepared_identity"]:
-                raise ValueError(
-                    "Prepared semantic data identity differs from the training parameters."
-                )
-            if context["thresholds"]:
-                raise ValueError("Semantic trials use no thresholds.")
-            return
         missing = TRAIN_KEYS - parameters.keys()
         if missing:
             raise ValueError(f"Missing training parameters: {sorted(missing)}")
@@ -289,6 +259,46 @@ class SatelliteBackend:
             digest.update(path.read_bytes())
         return digest.hexdigest()
 
+    # Schema-4 code identity (D-022): per-file hashes of normalized (CRLF->LF) sources, limited
+    # to the files this experiment's task and model depend on. The schema-3 code_signature()
+    # above is kept unchanged as the legacy algorithm for old protocols and migration evidence.
+    CONTROL_FILES = ("hpo_core.py", "automated_hpo.py")
+    MONITORING_FILES = ("hpo_accounting.py",)
+    TRAINING_FILES = (
+        "training.py",
+        "execution.py",
+        "losses.py",
+        "metrics.py",
+        "optimization.py",
+        "hpo_backend.py",
+        "data/__init__.py",
+        "data/levir_cd.py",
+        "data/transforms.py",
+        "models/__init__.py",
+        "models/factory.py",
+    )
+
+    def code_identity(self, context: Mapping[str, Any]) -> dict[str, Any]:
+        package = Path(__file__).resolve().parent
+        task = context.get("task") or BINARY_TASK
+        categories = dict.fromkeys(self.CONTROL_FILES, "control")
+        categories.update(dict.fromkeys(self.MONITORING_FILES, "monitoring"))
+        categories.update(dict.fromkeys(self.TRAINING_FILES, "training"))
+        source = inspect.getsourcefile(model_class_for_task(context["model_name"], task))
+        if source is None:
+            raise ValueError(f"Cannot locate the source of model {context['model_name']!r}.")
+        categories[Path(source).resolve().relative_to(package).as_posix()] = "training"
+        files = {
+            name: sha256((package / name).read_bytes().replace(b"\r\n", b"\n")).hexdigest()
+            for name in sorted(categories)
+        }
+        return {
+            "scheme": "satchange-code-v2",
+            "normalization": "CRLF->LF",
+            "files": files,
+            "categories": {name: categories[name] for name in sorted(categories)},
+        }
+
     def _inspect(
         self, directory: Path, context: dict, budget: int | None, explicit: Path | None = None
     ) -> dict | None:
@@ -317,12 +327,9 @@ class SatelliteBackend:
             raise ValueError(f"Invalid training configuration in {path}: {error}") from error
         if summary.get("parameters") and self.normalize(summary["parameters"]) != parameters:
             raise ValueError(f"summary.json parameters disagree with checkpoint: {directory}")
-        semantic = context.get("task") == SEMANTIC_TASK
-        if checkpoint.get("task") != (SEMANTIC_TASK if semantic else None):
+        if checkpoint.get("task") is not None:
             raise ValueError(f"Checkpoint task differs: {path}")
-        thresholds = raw.get(
-            "thresholds", [] if semantic or context.get("allow_legacy_import") else None
-        )
+        thresholds = raw.get("thresholds", [] if context.get("allow_legacy_import") else None)
         if thresholds != context["thresholds"]:
             raise ValueError(f"Threshold grid differs in {path}")
         if (
@@ -358,7 +365,7 @@ class SatelliteBackend:
             # An explicitly supplied best.pt means continue FROM ITS ACTUAL epoch.
             epoch = checkpoint["epoch"]
             complete = False
-        metrics = self._metrics(best, semantic)
+        metrics = self._metrics(best)
         if any(not math.isfinite(value) or not 0 <= value <= 1 for value in metrics.values()):
             raise ValueError(f"Invalid metrics in {path}")
         best_epoch = int(best["epoch"])
@@ -380,7 +387,7 @@ class SatelliteBackend:
                     "best_metrics", {}
                 )
                 for metric, value in metrics.items():
-                    saved_value = saved_best.get(metric if semantic else f"validation_{metric}")
+                    saved_value = saved_best.get(f"validation_{metric}")
                     if saved_value is None or abs(float(saved_value) - value) > 1e-8:
                         raise ValueError(
                             f"best.pt {metric} disagrees with last.pt metadata: {directory}"
@@ -404,7 +411,7 @@ class SatelliteBackend:
             "last_checkpoint": str(last_path.resolve()) if last_path.exists() else None,
             "best_checkpoint": str(best_path.resolve()),
             "best_epoch": best_epoch,
-            **self._summary_metrics(best, semantic),
+            **self._summary_metrics(best),
             "metrics": metrics,
             "model_name": context["model_name"],
             "training_seconds": summary.get("training_seconds"),
@@ -416,29 +423,11 @@ class SatelliteBackend:
         return row
 
     @staticmethod
-    def _metrics(best: Mapping[str, Any], semantic: bool) -> dict[str, float]:
-        if semantic:
-            score = float(best["selection_score"])
-            expected = (float(best["before_macro_f1"]) + float(best["after_macro_f1"])) / 2
-            if not math.isclose(score, expected, abs_tol=1e-12):
-                raise ValueError("Semantic selection score disagrees with per-date macro F1.")
-            return {"selection_score": score, "joint_accuracy": float(best["joint_accuracy"])}
+    def _metrics(best: Mapping[str, Any]) -> dict[str, float]:
         return {"f1": float(best["validation_f1"]), "iou": float(best["validation_iou"])}
 
     @classmethod
-    def _summary_metrics(cls, best: Mapping[str, Any], semantic: bool) -> dict[str, Any]:
-        if semantic:
-            return {
-                "task": SEMANTIC_TASK,
-                **cls._metrics(best, True),
-                "selected_metrics": {
-                    key: deepcopy(value)
-                    for key, value in best.items()
-                    if key.startswith(("before_", "after_"))
-                    or key
-                    in ("selection_score", "selection_rule", "joint_accuracy", "classes", "samples")
-                },
-            }
+    def _summary_metrics(cls, best: Mapping[str, Any]) -> dict[str, Any]:
         return {
             "best_f1": float(best["validation_f1"]),
             "best_iou": float(best["validation_iou"]),
@@ -523,7 +512,7 @@ class SatelliteBackend:
         return records
 
     def resources(self, devices: Sequence[str]) -> dict[str, dict]:
-        result = {}
+        result: dict[str, dict[str, Any]] = {}
         for name in devices:
             device = torch.device(name)
             if device.type == "cpu":
@@ -534,7 +523,11 @@ class SatelliteBackend:
             if device.index is None or device.index >= torch.cuda.device_count():
                 raise ValueError(f"Use a visible logical CUDA index: {name}")
             free, total = torch.cuda.mem_get_info(device)
-            result[name] = {"free_mib": free / 1024**2, "total_mib": total / 1024**2}
+            result[name] = {
+                "free_mib": free / 1024**2,
+                "total_mib": total / 1024**2,
+                "name": torch.cuda.get_device_name(device),
+            }
         return result
 
     def train(self, job: dict, device: str, stop_file: str) -> dict:
@@ -569,17 +562,15 @@ class SatelliteBackend:
         context = job["context"]
         parameters = deepcopy(job["parameters"])
         self.validate(parameters, context)
-        semantic = context.get("task") == SEMANTIC_TASK
-        score_key = "selection_score" if semantic else "validation_f1"
+        if context.get("task") not in (None, BINARY_TASK):
+            raise ValueError(f"Unsupported task: {context.get('task')}")
+        score_key = "validation_f1"
         device = resolve_device(device_name)
         if device.type == "cpu":
             torch.set_num_threads(context.get("cpu_threads", 1))
         if device.type == "cuda":
             torch.cuda.set_device(device)
         seed_everything(parameters["seed"])
-        if semantic:
-            torch.backends.cuda.matmul.allow_tf32 = parameters["tf32"]
-            torch.backends.cudnn.allow_tf32 = parameters["tf32"]
         source = job.get("source")
         run_name = source["run_name"] if source else f"seed_{parameters['seed']}"
         run_dir = Path(job["directory"]) / context["model_name"] / run_name
@@ -668,34 +659,28 @@ class SatelliteBackend:
                     flush=True,
                 )
             loss: torch.nn.Module
-            if semantic:
-                from satchange.semantic.training import SemanticCELoss, create_loaders
-
-                train_loader, val_loader = create_loaders(context["dataset_root"], parameters)
-                loss = SemanticCELoss(parameters["class_weights"]).to(device)
-            else:
-                data_options = dict(
-                    dataset_root=context["dataset_root"],
-                    image_size=parameters["image_size"],
-                    batch_size=parameters["batch_size"],
-                    num_workers=parameters["num_workers"],
-                    pin_memory=device.type == "cuda",
-                )
-                _, train_loader = create_dataset_dataloader(
-                    **data_options,
-                    split="train",
-                    shuffle=True,
-                    seed=parameters["seed"],
-                    transform=RandomFlipRotate(
-                        horizontal_flip_probability=0.5, vertical_flip_probability=0.5
-                    ),
-                )
-                _, val_loader = create_dataset_dataloader(**data_options, split="val")
-                loss = BCEDiceLoss(
-                    bce_weight=parameters["bce_weight"],
-                    dice_weight=parameters["dice_weight"],
-                    pos_weight=parameters["positive_weight"],
-                ).to(device)
+            data_options = dict(
+                dataset_root=context["dataset_root"],
+                image_size=parameters["image_size"],
+                batch_size=parameters["batch_size"],
+                num_workers=parameters["num_workers"],
+                pin_memory=device.type == "cuda",
+            )
+            _, train_loader = create_dataset_dataloader(
+                **data_options,
+                split="train",
+                shuffle=True,
+                seed=parameters["seed"],
+                transform=RandomFlipRotate(
+                    horizontal_flip_probability=0.5, vertical_flip_probability=0.5
+                ),
+            )
+            _, val_loader = create_dataset_dataloader(**data_options, split="val")
+            loss = BCEDiceLoss(
+                bce_weight=parameters["bce_weight"],
+                dice_weight=parameters["dice_weight"],
+                pos_weight=parameters["positive_weight"],
+            ).to(device)
             construction = deepcopy(parameters["model_parameters"])
             if source_epoch and "pretrained_backbone" in construction:
                 construction["pretrained_backbone"] = (
@@ -723,16 +708,6 @@ class SatelliteBackend:
                 "torch_version": str(torch.__version__),
                 "cuda_version": torch.version.cuda,
             }
-            if semantic:
-                from satchange.semantic.data import SemanticROIDataset
-
-                semantic_dataset = train_loader.dataset
-                assert isinstance(semantic_dataset, SemanticROIDataset)
-                config.pop("thresholds")
-                config["training_data"] = {
-                    "scenes": deepcopy(semantic_dataset.document["provenance"]["scenes"]),
-                    "protocol": deepcopy(semantic_dataset.document["protocol"]),
-                }
             try:
                 config["code_revision"] = subprocess.run(
                     ["git", "rev-parse", "HEAD"], capture_output=True, text=True, check=False
@@ -783,7 +758,7 @@ class SatelliteBackend:
             reason == "early_stopping" and job["policy"] is not None
         )
         seconds = sum(float(row.get("epoch_seconds", 0)) for row in history)
-        metrics = self._metrics(best, semantic)
+        metrics = self._metrics(best)
         if complete:
             # A historical best may have been found in an earlier phase. Its weights,
             # optimizer, epoch and history remain unchanged, but the NEW copy belongs
@@ -815,7 +790,7 @@ class SatelliteBackend:
             "policy": job["policy"],
             "parameters": config,
             "best_epoch": best["epoch"],
-            **self._summary_metrics(best, semantic),
+            **self._summary_metrics(best),
             "metrics": metrics,
             "best_validation_loss": best.get("validation_loss"),
             "best_precision": best.get("validation_precision"),
@@ -824,6 +799,11 @@ class SatelliteBackend:
             "seconds_per_epoch": seconds / epoch,
             "timing_scope": "sum of saved epoch_seconds; not end-to-end controller wall time",
             "gpu_hours": sum(float(row.get("gpu_hours", 0)) for row in history),
+            # Epochs inherited from an earlier phase's checkpoint are excluded here, so phase
+            # totals can be summed without double counting. Allocation time: gpu_ledger.jsonl.
+            "epoch_compute_gpu_hours_this_attempt": sum(
+                float(row.get("gpu_hours", 0)) for row in history if row["epoch"] > source_epoch
+            ),
             "peak_gpu_memory_mb": max(row.get("peak_gpu_memory_mb", 0) for row in history),
             "run_directory": str(run_dir),
             "run_name": run_name,
