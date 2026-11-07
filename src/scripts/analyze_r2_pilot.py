@@ -1,4 +1,4 @@
-"""Analyse Research 2 pilot v1 (see docs/research2/PILOT_SPEC.md): scratch vs LEVIR-CD initialization.
+"""Analyse Research 2 pilot v1 (docs/research2/PILOT_SPEC.md): scratch vs LEVIR-CD initialization.
 
 Reads ``last.pt`` histories of ``artifacts/research2/pilot/r2_pilot_<cond>_s<seed>_<version>`` (own
 trusted checkpoints, CPU), uses validation F1 only, and writes a JSON + Markdown summary. Usage:
@@ -23,7 +23,8 @@ def load_history(search: Path) -> list[dict]:
     files = sorted(search.glob("runs/*/fc_siam_diff/seed_*/last.pt"))
     if len(files) != 1:
         raise FileNotFoundError(f"Expected exactly one last.pt under {search}, found {len(files)}")
-    return torch.load(files[0], map_location="cpu", weights_only=False)["history"]
+    history: list[dict] = torch.load(files[0], map_location="cpu", weights_only=False)["history"]
+    return history
 
 
 def first_epoch_reaching(curve: list[float], target: float) -> int | None:
@@ -65,7 +66,8 @@ def main() -> None:
             rows[cond] = per_seed
         wins = 0
         for seed in SEEDS:
-            s, v = rows["scratch"][seed]["epochs_to_target"], rows["levir"][seed]["epochs_to_target"]
+            s = rows["scratch"][seed]["epochs_to_target"]
+            v = rows["levir"][seed]["epochs_to_target"]
             wins += int((v is not None) and (s is None or v < s))
         gaps = [
             (rows["scratch"][seed]["epochs_to_target"] or common + 1)
@@ -83,8 +85,9 @@ def main() -> None:
         print(f"{key:12s} f1@1={run['f1_epoch1']:.3f} f1@5={run['f1_epoch5']:.3f} "
               f"best={run['best_f1']:.4f}@{run['best_epoch']} final={run['final_f1']:.4f}")
     for level, row in report["levels"].items():
+        gap = row["median_epoch_gap_scratch_minus_levir"]
         print(f"tau={level} x scratch-final ({row['target_f1']:.4f}): levir faster in "
-              f"{row['seeds_where_levir_faster']}/3 seeds; median gap {row['median_epoch_gap_scratch_minus_levir']}")
+              f"{row['seeds_where_levir_faster']}/3 seeds; median gap {gap}")
     print("wrote", out)
 
 
