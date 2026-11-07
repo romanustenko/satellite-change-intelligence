@@ -1,12 +1,13 @@
 # Research 2 — Progress
 
-**Last updated:** 2026-11-06. Update after every meaningful task: what changed, evidence, new
+**Last updated:** 2026-11-07. Update after every meaningful task: what changed, evidence, new
 blockers. Keep it a state record, not a transcript.
 
 ## Current milestone
 
-**M0 — Planning initialized.** Persistent documentation created; protocol draft v0.1 PROPOSED.
-No Research 2 code, notebooks, datasets, training or HPO exist yet.
+**M1 — Foundation + SECOND data ready (2026-11-07).** Docs, HPO compatibility/GPU-hour ledger,
+TinySiamese removal, SECOND binary loader and split manifest done; SECOND installed locally and
+audited. Protocol draft v0.1 still PROPOSED (gate G11). No SECOND notebook, pilot, training or HPO yet.
 
 ## Research 1 (historical foundation, ongoing)
 
@@ -83,7 +84,7 @@ for SECOND final benchmarks, not only typing); the attributes were added with a 
 back to 40 (= HEAD baseline); full pytest 137 passed / 3 skipped / 0 failed.
 Next: R2-P08-T03 pilot spec (needs D-024), R2-P05-T03 notebook (needs D-008/D-009).
 
-## Session handoff (2026-11-06, end of session)
+## Session handoff (2026-11-06, end of session) — superseded by the 2026-11-07 handoff at the end of this file
 
 **State:** committed on local branch `research2/foundation` (not pushed). Not committed on purpose:
 the user's own edit in `notebooks/research_1/02_fc_siam_diff_full_hpo.ipynb` (2 lines), the
@@ -112,7 +113,7 @@ D-008/D-009, implement R2-P05-T03 (`notebooks/research_2/01_second_dataset_prepa
 guarded, unexecuted) on top of `prepare_second_splits`; otherwise start the R2-P08-T02/T03 design
 (SECOND binary loader via split manifest, minimal `initial_weights` key) and ask the user for D-013.
 
-## Latest validation (2026-11-06)
+## Validation (2026-11-06, historical; see the 2026-11-07 handoff for the latest)
 
 Full `pytest`: 134 passed, 3 skipped, 0 failed. `mypy src`: 40 pre-existing errors, identical to
 HEAD `b72cd6c`. `ruff` clean on touched files. Nothing committed; provenance tags local only.
@@ -157,3 +158,57 @@ D-008/D-009 are decided; R2-P08-T02/T03 design can start in parallel.
   class presence proportional, loader reads all three splits.
 - **Next:** R2-P05-T03 notebook (unexecuted skeleton using `prepare_second_splits` and
   `second_audit.py`); R2-P08-T03 pilot spec needs D-024.
+
+## Session handoff (2026-11-07, end of session) — START HERE in a new window
+
+**Restore context:** AGENTS.md §0 → `PROJECT_CONTEXT.md` §0 → `DECISION_LOG.md` → this section →
+`IMPLEMENTATION_PLAN.md` (task `R2-P05-T03`). Reply to the user briefly in Russian (D-032).
+
+**Git state:** branch `research2/foundation`, local only (not pushed). HEAD `cd0f2da` (SECOND install +
+audit + D-008/D-009), previous `8e9e630` (SECONDBinaryDataset file maps), `54e4f77`, `dc33444`.
+Deliberately uncommitted user files: `notebooks/research_1/02_fc_siam_diff_full_hpo.ipynb` (user edit),
+`Instruction.md`, `.clinerules/`, git-ignored local `AGENTS.md`. Never commit/modify them.
+
+**Done this session (2026-11-07):**
+1. Fixed `SECONDBinaryDataset` missing `before_files/after_files/label_files` (real `AttributeError` in
+   `final_benchmark` for SECOND, not only typing); test added in `tests/test_second_binary.py`.
+   `mypy src` back to 40 (= baseline). Full pytest at that point: 137 passed / 3 skipped / 0 failed.
+2. R2-P05-T01: SECOND downloaded (existing `bootstrap_second` download path) and installed by hand in
+   `data/SECOND` (git-ignored). Release is nested (`SECOND_total_test.zip` → `test/`,
+   `SECOND_train_set.rar` → `train/`); `bootstrap_second` cannot unpack it; I used Windows
+   `C:\Windows\System32	ar.exe` (bsdtar, reads RAR). Nested SHA256 in `data/SECOND/source.json`.
+3. Audit script `src/scripts/second_audit.py` → `docs/research2/second_audit.json` (counts, class
+   shares, duplicates, near-duplicate/adjacent-edge candidates, `merged_groups`;
+   `source_groups_from_report()` rebuilds the full group map).
+4. D-008 / D-009 decided (see `DECISION_LOG.md`): official test (1694) used as is; val = 15 % of train
+   groups, `split_seed=2099` → train 2524 / val 444 / test 1694; manifest
+   `data/SECOND/second_split_manifest.json` (sha256 `7d46718c…`), frozen. Verified: test == official
+   test, no overlap, merged groups intact, `create_dataset_dataloader` reads all three splits.
+
+**Data facts to reuse (observed):** 512×512 RGB tiles; labels are RGB colours matching `SECOND_COLORS`
+(0 unknown px); T1/T2 change support identical in every tile; ~20 % changed pixels; rarest class
+playground (229 train / 101 test tiles); 5 train tiles without change; official IDs interleave
+train/test (random assignment, no geography) → geographic independence unverifiable; leakage ≈ 1
+cross-split near-duplicate pair (`04041`↔`04070`) + 6 weak cross-split adjacency candidates.
+
+**Environment notes:** local machine is CPU-only; use `.\.venv\Scripts\python` (no system python on
+PATH in the bash tool: call `.venv/Scripts/python`). Docs are CRLF — edit with a script that preserves
+line endings. `data/` still holds temporary install leftovers (`.SECOND.incomplete-*` with the nested
+archives, and the outer `SECOND-*.zip`, ~7.6 GB); safe to delete only with the user's OK (data/** rule).
+Scratch analysis files (rows.pkl etc.) were in the session scratchpad and are not needed.
+
+**Not done / open:**
+- **R2-P05-T03** `notebooks/research_2/01_second_dataset_preparation.ipynb` — UNBLOCKED, not started:
+  guarded (download flag default False), unexecuted, reuse `prepare_second_splits` +
+  `second_audit.py`, document source/structure/classes/splits/leakage/"augmentation disabled" (D-018),
+  no fabricated outputs; validate with `tests/test_notebooks.py`.
+- Teach `bootstrap_second` the nested release layout (touches `semantic/` → HPO code signature; low priority).
+- Full `pytest` was not re-run after adding `src/scripts/second_audit.py` and docs (only mypy/ruff);
+  run it before the next commit that touches `src/satchange`.
+- **User decisions still pending:** D-013 (semantic target / single-stage baseline, unblocks P10),
+  D-024 (pilot target, needed for R2-P08-T03), D-005 (GPU budget after pilot), D-012, D-014/D-015,
+  D-018, D-002, D-025/D-026, D-022/G9 HPO design review.
+- Server-dependent: R2-P01-T01 server part, GPU reproducibility check, unfinished Research 1 searches.
+
+**Exact next action:** implement R2-P05-T03 (notebook skeleton), run `tests/test_notebooks.py` and the
+full pytest, update this file and the task status, commit locally; then ask the user for D-024 / D-013.
