@@ -36,6 +36,9 @@ def main() -> None:
     parser.add_argument("--gpus", type=int, nargs="+", required=True)
     parser.add_argument("--version", default="v1")
     parser.add_argument("--gpu-hour-budget", type=float, default=8.0)
+    parser.add_argument("--f1-gap", type=float, default=0.04, help="seeds phase: survivor F1 gap")
+    parser.add_argument("--iou-gap", type=float, default=0.05, help="seeds phase: survivor IoU gap")
+    parser.add_argument("--reuse-from", type=Path, default=None, help="earlier search directory")
     parser.add_argument("--dry-run", action="store_true")
     args = parser.parse_args()
     parameters = dict(BASE)
@@ -49,7 +52,8 @@ def main() -> None:
         output_root=ROOT / "artifacts/research2/where_hpo",
         search_name=f"r2_where_light_{args.version}", stage=args.phase,
         gpu_ids=args.gpus, checkpoint_interval=5, patience=None,
-        gpu_hour_budget=args.gpu_hour_budget, dry_run=args.dry_run, verbose=True,
+        gpu_hour_budget=args.gpu_hour_budget, f1_gap=args.f1_gap, iou_gap=args.iou_gap,
+        reuse_from=args.reuse_from, dry_run=args.dry_run, verbose=True,
     )
     print(json.dumps({k: report[k] for k in ("complete", "paused") if k in report}))
 
