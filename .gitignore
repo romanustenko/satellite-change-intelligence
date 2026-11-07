@@ -48,6 +48,10 @@ venv/
 
 data/*
 !data/.gitkeep
+!data/SECOND/
+data/SECOND/*
+!data/SECOND/second_split_manifest.json
+!data/SECOND/source.json
 
 
 # ============================================================
@@ -113,5 +117,3 @@ Thumbs.db
 # ============================================================
 
 changes_previous_semantic_implementation.md
-AGENTS.md
-instruction_for_agent.md

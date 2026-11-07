@@ -1,0 +1,19 @@
+{
+  "source": "https://captain-whu.github.io/SCD/",
+  "download": "https://drive.google.com/file/d/1mN8jzCKKK27p3ODGoDgepjiRYGQpB34u/view",
+  "archive": "D:\\Projects\\Projects\\Satellite change intelligence\\satellite-change-intelligence\\data\\SECOND-2517b74b57374cb7946b7ae8160cb617.zip",
+  "local_archive_sha256": "9b74defdb1623bf89d3a422e50f1ce1637aa4186ea1fff653ad316fb92090b65",
+  "checksum_is_local": true,
+  "nested_archives": {
+    "SECOND_total_test.zip": {
+      "bytes": 1378977505,
+      "local_sha256": "bf347e52bb802a17878faccee455319a38360dab94c202d88ee6746e9d7253c9"
+    },
+    "SECOND_train_set.rar": {
+      "bytes": 2406111691,
+      "local_sha256": "5ee2a82b5824b3f5e3c5bfaf018835862e7623993ff9ac5ce57fd11fcfad2b4e"
+    }
+  },
+  "extraction": "nested: SECOND_total_test.zip -> test/, SECOND_train_set.rar -> train/ (bsdtar); bootstrap_second does not handle nested release",
+  "complete": true
+}
