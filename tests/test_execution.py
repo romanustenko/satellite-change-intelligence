@@ -274,3 +274,76 @@ def test_legacy_model_common_checkpoint_regression(tmp_path, name, parameters):
             torch.testing.assert_close(value, fresh.state_dict()[key], rtol=0, atol=0)
     finally:
         torch.set_num_threads(previous)
+
+
+class _AugmentedPairs(torch.utils.data.Dataset):
+    """Synthetic paired scenes with one changed square; augmentation draws from the Torch RNG."""
+
+    def __init__(self, count, transform=None):
+        generator = torch.Generator().manual_seed(123)
+        self.before = torch.rand(count, 3, 32, 32, generator=generator)
+        self.after = self.before.clone()
+        self.mask = torch.zeros(count, 1, 32, 32)
+        for index in range(count):
+            y, x = torch.randint(0, 24, (2,), generator=generator).tolist()
+            self.after[index, :, y : y + 8, x : x + 8] = torch.rand(3, 8, 8, generator=generator)
+            self.mask[index, :, y : y + 8, x : x + 8] = 1.0
+        self.transform = transform
+
+    def __len__(self):
+        return len(self.mask)
+
+    def __getitem__(self, index):
+        sample = {
+            "before": self.before[index],
+            "after": self.after[index],
+            "mask": self.mask[index],
+            "sample_id": str(index),
+        }
+        return self.transform(sample) if self.transform else sample
+
+
+def test_repeat_and_epoch_boundary_resume_are_bitwise_identical(tmp_path):
+    """Seeded shuffling + augmentation: a repeat run and 2+2 resumed epochs equal 4 epochs."""
+    previous = torch.get_num_threads()
+    torch.set_num_threads(1)
+
+    def train(run_name, epochs, resume_from=None):
+        seed_everything(7)
+        model = create_change_model("fc_siam_diff", {"base_channels": 4})
+        train_loader = DataLoader(
+            _AugmentedPairs(12, RandomFlipRotate()),
+            batch_size=4,
+            shuffle=True,
+            generator=torch.Generator().manual_seed(7),
+        )
+        validation_loader = DataLoader(_AugmentedPairs(4), batch_size=4)
+        fit_binary_change_model(
+            model,
+            train_loader,
+            validation_loader,
+            BCEDiceLoss(),
+            torch.optim.AdamW(model.parameters(), lr=1e-3),
+            torch.device("cpu"),
+            epochs,
+            [0.5],
+            tmp_path,
+            "fc_siam_diff",
+            run_name,
+            checkpoint_interval=1,
+            config={"model_parameters": {"base_channels": 4}},
+            resume_from=resume_from,
+        )
+        return model.state_dict()
+
+    try:
+        reference = train("reference", 4)
+        repeat = train("repeat", 4)
+        partial = train("resumed", 2)
+        resumed = train("resumed", 2, tmp_path / "fc_siam_diff" / "resumed" / "last.pt")
+        assert any(not torch.equal(reference[key], partial[key]) for key in reference)
+        for key, value in reference.items():
+            torch.testing.assert_close(repeat[key], value, rtol=0, atol=0)
+            torch.testing.assert_close(resumed[key], value, rtol=0, atol=0)
+    finally:
+        torch.set_num_threads(previous)

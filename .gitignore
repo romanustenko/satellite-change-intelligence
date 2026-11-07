@@ -48,6 +48,10 @@ venv/
 
 data/*
 !data/.gitkeep
+!data/SECOND/
+data/SECOND/*
+!data/SECOND/second_split_manifest.json
+!data/SECOND/source.json
 
 
 # ============================================================

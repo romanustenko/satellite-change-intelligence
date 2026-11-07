@@ -126,22 +126,12 @@ def run_final_benchmark(
     dataset = _path(dataset_root or prepared, root)
     if output in (root, *root.parents, dataset, *dataset.parents):
         raise ValueError("Output must not be the project/dataset root or one of their ancestors.")
-    if task == "semantic_roi_classification":
-        from satchange.semantic.benchmark import finalize_semantic
-        if thresholds is not None or image_size != "auto":
-            raise ValueError("Semantic benchmark uses native ROIs and no binary thresholds.")
-        return finalize_semantic(
-            paths=paths, prepared=dataset, output=output, variant=variant, root=root,
-            training_results=training_results, metadata=metadata, device=device,
-            precision=precision, evaluation_batch_size=evaluation_batch_size,
-            num_workers=num_workers, deployment_seed=deployment_seed,
-            warmup=warmup, repetitions=repetitions, strict_validation=strict_validation,
-            validation_atol=validation_atol, overwrite=overwrite,
-        )
     if task != "binary_change_detection":
         raise ValueError(f"Unsupported benchmark task: {task}")
+    from satchange.data.second_binary import is_second_binary_root
+
     for split in ("val", "test"):
-        if not (dataset / split).is_dir():
+        if not is_second_binary_root(dataset) and not (dataset / split).is_dir():
             raise FileNotFoundError(f"Prepared dataset split is missing: {dataset / split}")
     if (dataset / "val").resolve() == (dataset / "test").resolve():
         raise ValueError("Validation and test resolve to the same directory.")

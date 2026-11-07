@@ -38,6 +38,127 @@ def identity(value: Any) -> str:
     return sha256(canonical(value).encode()).hexdigest()[:20]
 
 
+# Code identity and compatibility (D-022). Schema 4 protocols record a per-file code manifest;
+# code_history.json beside the protocol records every accepted identity (initial, monitoring-only
+# changes, explicitly acknowledged exceptions). Older protocols are never rewritten.
+CODE_HISTORY = "code_history.json"
+CODE_FIELDS = frozenset({"schema_version", "code_identity", "backend_code_signature"})
+VERIFIED = frozenset({"identical", "monitoring_only"})
+SEARCH_MARKERS = ("pipeline_protocol.json", "automated_hpo_protocol.json", CODE_HISTORY)
+
+
+class CodeCompatibilityError(ValueError):
+    """Code that can change training or experiment behaviour differs from the accepted code."""
+
+
+def backend_code_identity(backend: Backend, context: Row) -> Row:
+    method = getattr(backend, "code_identity", None)
+    if method is None:  # Third-party backends: one opaque hash, every difference blocks.
+        return {"scheme": "legacy-signature", "signature": backend.code_signature()}
+    return cast(Row, method(context))
+
+
+def accepted_identity(root: Path, protocol: Row) -> Row:
+    """Latest accepted code identity of a search directory (history first, then protocol)."""
+    history_path = root / CODE_HISTORY
+    if history_path.exists():
+        history = read_json(history_path)
+        if not history:
+            raise ValueError(f"Empty code history: {history_path}")
+        return cast(Row, history[-1]["identity"])
+    if protocol.get("code_identity"):
+        return cast(Row, protocol["code_identity"])
+    if protocol.get("backend_code_signature"):
+        return {"scheme": "legacy-signature", "signature": protocol["backend_code_signature"]}
+    return {"scheme": "unknown"}
+
+
+def compare_identity(accepted: Row, current: Row, legacy_signature: str) -> Row:
+    """Return verdict identical/monitoring_only/different/unknown with the changed files."""
+    if accepted.get("scheme") == "legacy-signature":
+        same = accepted.get("signature") in (legacy_signature, current.get("signature"))
+        return {"verdict": "identical" if same else "unknown", "changed": None, "blocking": None}
+    if accepted.get("scheme") != current.get("scheme") or "files" not in accepted:
+        return {"verdict": "unknown", "changed": None, "blocking": None}
+    old, new = accepted["files"], current["files"]
+    categories = {**accepted.get("categories", {}), **current.get("categories", {})}
+    changed = sorted(name for name in set(old) | set(new) if old.get(name) != new.get(name))
+    blocking = [name for name in changed if categories.get(name) != "monitoring"]
+    verdict = "identical" if not changed else "different" if blocking else "monitoring_only"
+    return {"verdict": verdict, "changed": changed, "blocking": blocking}
+
+
+def _utc() -> str:
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
+def acknowledge_code_change(
+    search_directory: str | Path,
+    *,
+    reason: str,
+    evidence: Sequence[str],
+    backend: str | None = None,
+    context: Row | None = None,
+) -> Row:
+    """Record an explicit, evidence-backed compatibility exception for a search directory.
+
+    The exception accepts the CURRENT code for that directory. It is appended to
+    code_history.json with the changed files, reason and evidence; nothing is rewritten.
+    Legacy pre-v3 folders need backend and context (model_name[, task]).
+    """
+    root = Path(search_directory).expanduser().resolve()
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("A compatibility exception needs a non-empty reason.")
+    if isinstance(evidence, str) or not evidence or any(
+        not isinstance(item, str) or not item.strip() for item in evidence
+    ):
+        raise ValueError("A compatibility exception needs a list of evidence strings.")
+    pipeline, legacy = root / "pipeline_protocol.json", root / "automated_hpo_protocol.json"
+    with experiment_lock(root):
+        if pipeline.exists():
+            protocol = read_json(pipeline)
+            backend, context = protocol["backend"], protocol["context"]
+        elif legacy.exists():
+            protocol = read_json(legacy)
+            if backend is None or context is None:
+                raise ValueError("Legacy folders need explicit backend and context.")
+        else:
+            raise FileNotFoundError(f"No HPO protocol in {root}")
+        adapter = load_backend(cast(str, backend))
+        current = backend_code_identity(adapter, cast(Row, context))
+        previous = accepted_identity(root, protocol)
+        comparison = compare_identity(previous, current, adapter.code_signature())
+        if comparison["verdict"] in VERIFIED:
+            return {"status": "already_compatible", **comparison}
+        history_path = root / CODE_HISTORY
+        history = read_json(history_path) if history_path.exists() else [
+            {"kind": "origin", "identity": previous, "identity_id": identity(previous),
+             "recorded_utc": _utc(), "note": "identity recorded by the original protocol"}
+        ]
+        entry = {
+            "kind": "acknowledged_exception",
+            "identity": current,
+            "identity_id": identity(current),
+            "previous_identity_id": history[-1]["identity_id"],
+            "changed_files": comparison["changed"],
+            "blocking_files": comparison["blocking"],
+            "verdict_before": comparison["verdict"],
+            "reason": reason.strip(),
+            "evidence": [item.strip() for item in evidence],
+            "recorded_utc": _utc(),
+            "host": socket.gethostname(),
+        }
+        write_json(history_path, [*history, entry])
+        return entry
+
+
+def search_root_of(path: Path) -> Path | None:
+    for candidate in (path, *path.parents):
+        if any((candidate / marker).exists() for marker in SEARCH_MARKERS):
+            return candidate
+    return None
+
+
 def read_json(path: str | Path) -> Any:
     return json.loads(Path(path).read_text(encoding="utf-8-sig"))
 
@@ -165,6 +286,10 @@ class PipelineSettings:
     memory_margin_mib: float = 512
     max_oom_attempts: int | None = 12
     verbose: bool = True
+    gpu_hour_budget: float | None = None
+    budget_reason: str | None = None
+    heartbeat_seconds: float = 60.0
+    unverified_reuse: str = "refuse"
 
 
 def family(parameters: Row) -> Row:
@@ -233,21 +358,89 @@ class Experiment:
         self.root = settings.root
         self.backend = load_backend(settings.backend)
         self.records: list[Row] = []
+        self.code_identity: Row = backend_code_identity(self.backend, settings.context)
+        self.code_identity_id = identity(self.code_identity)
+        self._legacy_signature: str | None = None
+        self._ledger: Any = None
 
     def announce(self, message: str) -> None:
         if self.s.verbose:
             print(message, flush=True)
 
+    @property
+    def legacy_signature(self) -> str:
+        if self._legacy_signature is None:
+            self._legacy_signature = self.backend.code_signature()
+        return self._legacy_signature
+
+    @property
+    def ledger(self) -> Any:
+        if self._ledger is None:
+            from .hpo_accounting import GpuLedger
+
+            self._ledger = GpuLedger(self.root, heartbeat_seconds=self.s.heartbeat_seconds)
+        return self._ledger
+
+    def source_provenance(self, run_directory: Path) -> Row:
+        """Code provenance of a discovered run relative to the CURRENT code."""
+        root = search_root_of(run_directory)
+        if root is None:
+            return {"verdict": "unknown", "source_root": None, "reason": "no HPO protocol"}
+        if root == self.root:
+            return {"verdict": "identical", "source_root": str(root),
+                    "code_identity_id": self.code_identity_id}
+        protocol: Row = {}
+        for name in ("pipeline_protocol.json", "automated_hpo_protocol.json"):
+            if (root / name).exists():
+                protocol = read_json(root / name)
+                break
+        accepted = accepted_identity(root, protocol)
+        comparison = compare_identity(accepted, self.code_identity, self.legacy_signature)
+        return {"verdict": comparison["verdict"], "source_root": str(root),
+                "code_identity_id": identity(accepted), "changed_files": comparison["changed"]}
+
     def refresh(self) -> None:
         self.records = self.backend.discover(
             [*self.s.reuse_from, str(self.root)], self.s.checkpoints, self.s.context
         )
+        cache: dict[str, Row] = {}
+        for row in self.records:
+            directory = Path(row["run_directory"])
+            root = search_root_of(directory)
+            key = str(root)
+            if key not in cache:
+                cache[key] = self.source_provenance(directory)
+            row["code_provenance"] = cache[key]
+
+    def _verify_code(self, protocol: Row) -> None:
+        accepted = accepted_identity(self.root, protocol)
+        comparison = compare_identity(accepted, self.code_identity, self.legacy_signature)
+        if comparison["verdict"] == "identical":
+            return
+        history_path = self.root / CODE_HISTORY
+        if comparison["verdict"] == "monitoring_only" and history_path.exists():
+            history = read_json(history_path)
+            write_json(history_path, [*history, {
+                "kind": "monitoring_change", "identity": self.code_identity,
+                "identity_id": self.code_identity_id,
+                "previous_identity_id": history[-1]["identity_id"],
+                "changed_files": comparison["changed"], "recorded_utc": _utc(),
+            }])
+            return
+        files = comparison["blocking"] or "unknown (schema-3/legacy protocol: one opaque hash)"
+        raise CodeCompatibilityError(
+            f"Code that affects training or experiment control differs from the code accepted "
+            f"for {self.root}: {files}. The search definition is unchanged; continuing would mix "
+            "code versions. Use a new search_name (reuse completed results only with "
+            "unverified_reuse='exploratory'), or record an evidence-backed exception with "
+            "acknowledge_code_change(search_directory, reason=..., evidence=[...])."
+        )
 
     def ensure_protocol(self) -> None:
         fixed = {
-            "schema_version": 3,
+            "schema_version": 4,
             "backend": self.s.backend,
-            "backend_code_signature": self.backend.code_signature(),
+            "code_identity": self.code_identity,
             "context": self.s.context,
             "base": self.s.base_parameters,
             "stages": self.s.stages,
@@ -260,13 +453,21 @@ class Experiment:
         }
         fixed = json.loads(canonical(fixed))
         path = self.root / "pipeline_protocol.json"
-        if path.exists() and read_json(path) != fixed:
-            raise ValueError(
-                "Model/data/code/search definition changed. Use a new search_name; "
-                "reuse_from can point to the old experiment."
-            )
-        if not path.exists():
+        if path.exists():
+            saved = read_json(path)
+            definition = {k: v for k, v in fixed.items() if k not in CODE_FIELDS}
+            if {k: v for k, v in saved.items() if k not in CODE_FIELDS} != definition:
+                raise ValueError(
+                    "Model/data/code/search definition changed. Use a new search_name; "
+                    "reuse_from can point to the old experiment."
+                )
+            self._verify_code(saved)
+        else:
             write_json(path, fixed)
+            write_json(self.root / CODE_HISTORY, [{
+                "kind": "initial", "identity": self.code_identity,
+                "identity_id": self.code_identity_id, "recorded_utc": _utc(),
+            }])
         # Budgets are recorded per operation, so a larger target is a new explicit operation.
 
     def _matching(self, parameters: Row) -> list[Row]:
@@ -274,7 +475,25 @@ class Experiment:
         return [row for row in self.records if canonical(row["parameters"]) == key]
 
     def _source(self, parameters: Row, target: int, policy: Row | None) -> tuple[Row | None, bool]:
-        matches = [row for row in self._matching(parameters) if row["epoch"] <= target]
+        candidates = [row for row in self._matching(parameters) if row["epoch"] <= target]
+        matches = [
+            row for row in candidates
+            if row.get("code_provenance", {}).get("verdict", "identical") in VERIFIED
+        ]
+        unverified = [row for row in candidates if row not in matches]
+        if unverified and not matches:
+            usable = [row for row in unverified if can_reuse(row, target, policy)]
+            if usable and self.s.unverified_reuse == "exploratory":
+                chosen = sorted(usable, key=lambda row: (-row["epoch"], row["run_directory"]))[0]
+                return {**chosen, "exploratory_only": True}, True
+            roots = sorted({str(row["code_provenance"].get("source_root")) for row in unverified})
+            raise CodeCompatibilityError(
+                f"Matching run(s) for seed={parameters['seed']} come from code that is not "
+                f"verified against the current code ({roots}). Continuing partial runs across "
+                "code versions is refused. Completed results may be reused for exploratory "
+                "analysis only with unverified_reuse='exploratory'; or record an evidence-backed "
+                "exception in the source directory with acknowledge_code_change(...)."
+            )
         reusable = [row for row in matches if can_reuse(row, target, policy)]
         if reusable:
             return sorted(reusable, key=lambda row: (-row["epoch"], row["run_directory"]))[0], True
@@ -448,6 +667,43 @@ class Experiment:
         executors: dict[str, ProcessPoolExecutor] = {}
         stop = self.root / "PAUSE_AFTER_EPOCH"
         drain = self.root / "STOP_AFTER_ACTIVE_TRIALS"
+        ledger = self.ledger
+        orphans = ledger.close_orphans()
+        if orphans:
+            self.announce(f"[GPU-HOURS] Closed {len(orphans)} allocation(s) of a dead controller.")
+        budget = ledger.budget
+        budget_state: str | None = None
+        last_heartbeat = time.monotonic()
+        model_name = self.s.context.get("model_name")
+
+        def start_epoch(job: Row) -> int:
+            source = job.get("source")
+            return int(source["epoch"]) if source and not job.get("reused") else 0
+
+        def expected_hours(job: Row) -> float:
+            per_epoch = ledger.seconds_per_epoch(model_name=model_name)
+            if per_epoch is None:
+                return 0.0
+            return float(max(0, job["target_epoch"] - start_epoch(job)) * per_epoch / 3600)
+
+        def committed_hours() -> float:
+            """Spent (closed + active elapsed) plus the expected rest of active allocations."""
+            rest = sum(
+                max(0.0, state["expected"] - ledger.spent(ids=[state["allocation"]]))
+                for _, state in active.values()
+            )
+            return float(ledger.spent()) + float(rest)
+
+        def accounting() -> Row:
+            operation_ids = [
+                key for key, value in ledger.allocations.items()
+                if value.get("operation") == directory.name
+            ]
+            return {
+                **ledger.summary(),
+                "operation_allocated_gpu_hours": ledger.spent(ids=operation_ids),
+                "budget_state": budget_state,
+            }
 
         def save() -> Row:
             report = {
@@ -466,6 +722,11 @@ class Experiment:
                 + [s["job"]["id"] for _, s in active.values()],
                 "test_used": False,
                 "report_path": str(report_path),
+                "code_identity_id": self.code_identity_id,
+                "exploratory_only_job_ids": sorted(
+                    key for key, row in results.items() if row.get("exploratory_only")
+                ),
+                "gpu_accounting": accounting(),
             }
             write_json(report_path, report)
             return report
@@ -491,6 +752,7 @@ class Experiment:
                             key=lambda d: resource[d].get("free_mib", float("inf")),
                             reverse=True,
                         )
+                        room = None if budget is None else budget - committed_hours()
                         for device in ordered:
                             available = resource[device].get("free_mib", float("inf"))
                             total = resource[device].get("total_mib", float("inf"))
@@ -502,12 +764,36 @@ class Experiment:
                                     and device not in s["blocked"]
                                     and available
                                     >= min(s["need"], max(0, total - self.s.memory_margin_mib))
+                                    and (
+                                        room is None
+                                        or (room > 0 and expected_hours(s["job"]) <= room)
+                                    )
                                 ),
                                 None,
                             )
                             if chosen is None:
                                 continue
                             state = pending.pop(chosen)
+                            state["expected"] = expected_hours(state["job"])
+                            if room is not None:
+                                room -= state["expected"]
+                            state["allocation"] = ledger.start(
+                                devices=[device],
+                                gpu_names=[resource[device].get("name")],
+                                job_id=state["job"]["id"],
+                                attempt=len(state["attempts"]) + 1,
+                                phase=plan["phase"],
+                                label=plan["label"],
+                                operation=directory.name,
+                                model_name=model_name,
+                                seed=state["job"]["parameters"].get("seed"),
+                                parameters_id=identity(state["job"]["parameters"]),
+                                code_identity_id=self.code_identity_id,
+                                target_epoch=state["job"]["target_epoch"],
+                                start_epoch=start_epoch(state["job"]),
+                                expected_gpu_hours=state["expected"],
+                            )
+                            state.setdefault("allocations", []).append(state["allocation"])
                             if device not in executors:
                                 executors[device] = ProcessPoolExecutor(
                                     max_workers=1, mp_context=context
@@ -527,6 +813,24 @@ class Experiment:
                                 _worker, self.s.backend, job, device, str(stop)
                             )
                             active[future] = device, state
+                        if (
+                            room is not None
+                            and not active
+                            and pending
+                            and all(
+                                not (room > 0 and expected_hours(s["job"]) <= room)
+                                for s in pending
+                            )
+                        ):
+                            # Nothing fits into the remaining budget: stop dispatching.
+                            paused = True
+                            budget_state = "exhausted" if cast(float, room) <= 0 else (
+                                "insufficient_for_next_trial"
+                            )
+                            self.announce(
+                                f"[GPU-HOURS] Budget {budget:.3f} h: {budget_state}; "
+                                "no new trials dispatched."
+                            )
                     if not active:
                         if paused:
                             break
@@ -538,6 +842,9 @@ class Experiment:
                         time.sleep(min(self.s.retry_seconds, 1.0))
                         continue
                     done, _ = wait(active, timeout=0.5, return_when=FIRST_COMPLETED)
+                    if time.monotonic() - last_heartbeat >= self.s.heartbeat_seconds:
+                        ledger.heartbeat([state["allocation"] for _, state in active.values()])
+                        last_heartbeat = time.monotonic()
                     for future in done:
                         device, state = active.pop(future)
                         job = state["job"]
@@ -547,6 +854,24 @@ class Experiment:
                             result = {"status": "failed", "error": f"Worker failed: {error}"}
                         result.update(job_id=job["id"], attempts=state["attempts"])
                         status = result.get("status")
+                        trained = (
+                            max(0, int(result.get("epoch", 0)) - start_epoch(job))
+                            if status in ("completed", "paused")
+                            else 0
+                        )
+                        ledger.end(
+                            state["allocation"],
+                            str(status),
+                            epochs_trained=trained,
+                            best_checkpoint=result.get("best_checkpoint"),
+                            metrics=result.get("metrics"),
+                            error=str(result.get("error", ""))[:2000] or None,
+                        )
+                        result.update(
+                            allocation_ids=list(state["allocations"]),
+                            allocated_gpu_hours=ledger.spent(ids=state["allocations"]),
+                            code_identity_id=self.code_identity_id,
+                        )
                         if status == "completed":
                             results[job["id"]] = result
                         elif status == "paused":
@@ -580,6 +905,20 @@ class Experiment:
                         else:
                             failures[job["id"]] = result
                         save()
+                    if (
+                        budget is not None
+                        and active
+                        and not stop.exists()
+                        and ledger.spent() >= budget
+                    ):
+                        # Budget reached while trials run: pause them at the next epoch boundary.
+                        stop.touch()
+                        paused = True
+                        budget_state = "exhausted_mid_run"
+                        self.announce(
+                            f"[GPU-HOURS] Budget {budget:.3f} h reached; pausing active trials "
+                            "at the next epoch boundary."
+                        )
                 except KeyboardInterrupt:
                     stop.touch()
                     paused = True
@@ -587,10 +926,17 @@ class Experiment:
                         "[PAUSE] No new trials. Waiting for active trials "
                         "to save the current epoch."
                     )
+            if budget is not None:
+                overshoot = ledger.spent() - budget - ledger.summary()["overshoot_gpu_hours"]
+                if overshoot > 1e-9:
+                    ledger.record_overshoot(overshoot, cause=budget_state or "trial_completion")
             report = save()
         finally:
             for executor in executors.values():
                 executor.shutdown(wait=True, cancel_futures=True)
+            for _, state in active.values():
+                # Results of these trials were never observed by this controller.
+                ledger.end(state["allocation"], "aborted_unobserved")
         if failures:
             error_class = (
                 ParameterSearchMemoryError
@@ -670,6 +1016,12 @@ class Experiment:
         final_parameters: Row | None = None,
     ) -> Row:
         self.ensure_protocol()
+        if self.s.gpu_hour_budget is not None and self.s.gpu_hour_budget != self.ledger.budget:
+            # Budgets live in the ledger, not in the protocol: changing one is a recorded event.
+            self.ledger.set_budget(
+                self.s.gpu_hour_budget,
+                reason=self.s.budget_reason or "set by run_automated_parameter_search",
+            )
         target = self.s.stage_epochs[stage]
         if additional_epochs:
             if (

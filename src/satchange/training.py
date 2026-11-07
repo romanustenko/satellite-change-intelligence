@@ -46,7 +46,7 @@ class EarlyStopping:
     last_epoch: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
-        if self.monitor not in ("validation_f1", "selection_score"):
+        if self.monitor != "validation_f1":
             raise ValueError("Unsupported early-stopping monitor.")
         if self.patience is not None and (
             type(self.patience) is not int or self.patience < 1
@@ -256,10 +256,8 @@ def restore_best_checkpoint(state: dict[str, Any], source: Path, destination: Pa
                 candidate = None
             if (candidate is not None and candidate["epoch"] == best_epoch
                     and candidate.get("model_name") == state.get("model_name")
-                    and candidate.get("best_metrics", {}).get("selection_score",
-                        candidate.get("best_metrics", {}).get("validation_f1"))
-                        == state["best_metrics"].get("selection_score",
-                           state["best_metrics"].get("validation_f1"))
+                    and candidate.get("best_metrics", {}).get("validation_f1")
+                        == state["best_metrics"].get("validation_f1")
                     and candidate["model_state_dict"].keys() == weights.keys()
                     and all(torch.equal(candidate["model_state_dict"][key].cpu(), tensor.cpu())
                             for key, tensor in weights.items())):
@@ -584,16 +582,10 @@ def fit_binary_change_model(
     min_epochs refers to the absolute epoch number. Every F1 maximum still saves
     best.pt, even when its gain is smaller than the stopping min_delta.
     """
-    from satchange.models.factory import BINARY_TASK, SEMANTIC_TASK
-    if task not in (BINARY_TASK, SEMANTIC_TASK):
+    from satchange.models.factory import BINARY_TASK
+    if task != BINARY_TASK:
         raise ValueError(f"Unsupported training task: {task}")
-    semantic = task == SEMANTIC_TASK
-    score_key = "selection_score" if semantic else "validation_f1"
-    if semantic and (thresholds or world_size() != 1):
-        raise ValueError("Semantic ROI trials use no thresholds and one worker per GPU.")
-    if semantic and config is None:
-        raise ValueError("Semantic training requires resolved HPO configuration.")
-    tf32 = bool((config or {}).get("tf32", False))
+    score_key = "validation_f1"
     early_stopping = EarlyStopping(patience, min_epochs, min_delta, monitor=score_key)
     if resume_from is None:
         early_stopping.validate_budget(number_of_epochs)
@@ -664,7 +656,6 @@ def fit_binary_change_model(
 
     best_f1 = -1.0
     best_weights: dict[str, torch.Tensor] | None = None
-    runtime_history: list[dict[str, Any]] = []
 
     if resume_from is not None:
         resume_path = Path(
@@ -731,11 +722,6 @@ def fit_binary_change_model(
         if checkpoint.get("task", BINARY_TASK) != task:
             raise ValueError("Resume task differs from the saved checkpoint.")
         saved_config = checkpoint.get("config")
-        if semantic:
-            from satchange.optimization import _resume_parameters
-            if (config is None
-                    or _resume_parameters(config) != _resume_parameters(saved_config or {})):
-                raise ValueError("Resume semantic taxonomy/data/training protocol differs.")
         if config is not None and saved_config is not None:
             def architecture(value: dict[str, Any]) -> Any:
                 return value.get("model_parameters", value.get("model", {}).get("parameters"))
@@ -800,14 +786,6 @@ def fit_binary_change_model(
                 best_metrics[score_key]
             )
 
-        if semantic:
-            runtime_history = checkpoint.get("runtime_history", [])
-            previous_runtime = checkpoint.get("runtime", {})
-            current_runtime = {"device": str(device), "torch": str(torch.__version__),
-                               "cuda": torch.version.cuda, "tf32": tf32}
-            if previous_runtime != current_runtime:
-                runtime_history = [*runtime_history, {"resumed_epoch": saved_epoch,
-                                   "previous": previous_runtime, "current": current_runtime}]
         if reset_early_stopping:
             early_stopping.last_epoch = saved_epoch
         else:
@@ -866,51 +844,33 @@ def fit_binary_change_model(
 
         if hasattr(train_loader.sampler, "set_epoch"):
             train_loader.sampler.set_epoch(epoch)
-        if semantic:
-            from satchange.models import TinySiameseChangeClassifier
-            from satchange.semantic.training import SemanticCELoss, run_epoch
-            if not isinstance(bare_model, TinySiameseChangeClassifier) or not isinstance(
-                loss_function, SemanticCELoss
-            ):
-                raise ValueError(
-                    "Semantic task requires Tiny classifier and SemanticCELoss adapters."
-                )
-            weights = loss_function.weights
-            assert weights is None or isinstance(weights, torch.Tensor)
-            training_results = run_epoch(bare_model, train_loader, device, weights=weights,
-                                         precision=precision, optimizer=optimizer)
-            train_loss = training_results["loss"]
-            validation_results = run_epoch(bare_model, validation_loader, device,
-                                           weights=weights, precision=precision)
-            epoch_score = validation_results["selection_score"]
-        else:
-            train_loss = train_one_epoch(
-                model=model,
-                data_loader=train_loader,
-                loss_function=loss_function,
-                optimizer=optimizer,
-                device=device,
-                precision=precision,
-            )
+        train_loss = train_one_epoch(
+            model=model,
+            data_loader=train_loader,
+            loss_function=loss_function,
+            optimizer=optimizer,
+            device=device,
+            precision=precision,
+        )
 
-            train_loss = sum(gather_objects(train_loss)) / world_size()
-            validation_results = on_rank_zero(lambda: evaluate_thresholds(
-                model=bare_model,
-                data_loader=validation_loader,
-                loss_function=loss_function,
-                device=device,
-                thresholds=thresholds,
-                precision=precision,
-            ))
+        train_loss = sum(gather_objects(train_loss)) / world_size()
+        validation_results = on_rank_zero(lambda: evaluate_thresholds(
+            model=bare_model,
+            data_loader=validation_loader,
+            loss_function=loss_function,
+            device=device,
+            thresholds=thresholds,
+            precision=precision,
+        ))
 
-            best_threshold_result = max(
-                validation_results[
-                    "threshold_results"
-                ],
-                key=lambda result: result["f1"],
-            )
+        best_threshold_result = max(
+            validation_results[
+                "threshold_results"
+            ],
+            key=lambda result: result["f1"],
+        )
 
-            epoch_score = best_threshold_result["f1"]
+        epoch_score = best_threshold_result["f1"]
 
         learning_rate = float(
             optimizer.param_groups[0]["lr"]
@@ -952,97 +912,88 @@ def fit_binary_change_model(
             peak_gpu_memory_mb = 0.0
 
 
-        if semantic:
-            epoch_metrics = {
-                "epoch": epoch, "task": task, "train_loss": train_loss,
-                "validation_loss": validation_results["loss"],
-                **{k: v for k, v in validation_results.items() if k not in ("loss", "loss_totals")},
-                "learning_rate": learning_rate, "next_learning_rate": next_learning_rate,
-                "epoch_seconds": epoch_seconds, "peak_gpu_memory_mb": peak_gpu_memory_mb,
-            }
-        else:
-            threshold_05_result = next(
-                (
-                    result
-                    for result
-                    in validation_results[
-                        "threshold_results"
-                    ]
-                    if result["threshold"] == 0.50
-                ),
-                None,
-            )
-
-            mean_changed_probability = (
-                validation_results[
-                    "mean_changed_probability"
+        threshold_05_result = next(
+            (
+                result
+                for result
+                in validation_results[
+                    "threshold_results"
                 ]
-            )
+                if result["threshold"] == 0.50
+            ),
+            None,
+        )
 
-            mean_unchanged_probability = (
-                validation_results[
-                    "mean_unchanged_probability"
-                ]
-            )
+        mean_changed_probability = (
+            validation_results[
+                "mean_changed_probability"
+            ]
+        )
 
-            probability_gap = (
+        mean_unchanged_probability = (
+            validation_results[
+                "mean_unchanged_probability"
+            ]
+        )
+
+        probability_gap = (
+            mean_changed_probability
+            - mean_unchanged_probability
+        )
+
+        epoch_metrics = {
+            "epoch": epoch,
+            "train_loss": train_loss,
+            "validation_loss": (
+                validation_results["loss"]
+            ),
+            "best_threshold": (
+                best_threshold_result["threshold"]
+            ),
+            "validation_precision": (
+                best_threshold_result["precision"]
+            ),
+            "validation_recall": (
+                best_threshold_result["recall"]
+            ),
+            "validation_f1": (
+                best_threshold_result["f1"]
+            ),
+            "validation_iou": (
+                best_threshold_result["iou"]
+            ),
+            "validation_accuracy": (
+                best_threshold_result["accuracy"]
+            ),
+            "true_positive": (
+                best_threshold_result["tp"]
+            ),
+            "false_positive": (
+                best_threshold_result["fp"]
+            ),
+            "false_negative": (
+                best_threshold_result["fn"]
+            ),
+            "true_negative": (
+                best_threshold_result["tn"]
+            ),
+            "f1_at_05": (
+                threshold_05_result["f1"]
+                if threshold_05_result is not None
+                else None
+            ),
+            "mean_changed_probability": (
                 mean_changed_probability
-                - mean_unchanged_probability
-            )
-
-            epoch_metrics = {
-                "epoch": epoch,
-                "train_loss": train_loss,
-                "validation_loss": (
-                    validation_results["loss"]
-                ),
-                "best_threshold": (
-                    best_threshold_result["threshold"]
-                ),
-                "validation_precision": (
-                    best_threshold_result["precision"]
-                ),
-                "validation_recall": (
-                    best_threshold_result["recall"]
-                ),
-                "validation_f1": (
-                    best_threshold_result["f1"]
-                ),
-                "validation_iou": (
-                    best_threshold_result["iou"]
-                ),
-                "validation_accuracy": (
-                    best_threshold_result["accuracy"]
-                ),
-                "true_positive": (
-                    best_threshold_result["tp"]
-                ),
-                "false_positive": (
-                    best_threshold_result["fp"]
-                ),
-                "false_negative": (
-                    best_threshold_result["fn"]
-                ),
-                "true_negative": (
-                    best_threshold_result["tn"]
-                ),
-                "f1_at_05": (
-                    threshold_05_result["f1"]
-                    if threshold_05_result is not None
-                    else None
-                ),
-                "mean_changed_probability": (
-                    mean_changed_probability
-                ),
-                "mean_unchanged_probability": (
-                    mean_unchanged_probability
-                ),
-                "probability_gap": probability_gap,
-                "learning_rate": learning_rate,
-                "next_learning_rate": next_learning_rate,
-                "epoch_seconds": epoch_seconds,
-                "peak_gpu_memory_mb": peak_gpu_memory_mb,
-            }
+            ),
+            "mean_unchanged_probability": (
+                mean_unchanged_probability
+            ),
+            "probability_gap": probability_gap,
+            "learning_rate": learning_rate,
+            "next_learning_rate": next_learning_rate,
+            "epoch_seconds": epoch_seconds,
+            "peak_gpu_memory_mb": peak_gpu_memory_mb,
+        }
 
         metric_history.append(
             epoch_metrics
@@ -1116,12 +1067,6 @@ def fit_binary_change_model(
             ),
         }
 
-        if semantic:
-            checkpoint_state.pop("thresholds")
-            checkpoint_state["task"] = task
-            checkpoint_state["runtime_history"] = runtime_history
-            checkpoint_state["runtime"] = {"device": str(device), "torch": str(torch.__version__),
-                                           "cuda": torch.version.cuda, "tf32": tf32}
 
         def save_epoch(
             checkpoint_state: dict[str, Any] = checkpoint_state,
@@ -1185,34 +1130,30 @@ def fit_binary_change_model(
             f"{validation_results['loss']:.6f}"
         )
 
-        if semantic:
-            print(f"Validation selection score: {epoch_score:.6f}; "
-                  f"joint accuracy: {validation_results['joint_accuracy']:.6f}")
-        else:
-            print(
-                f"Best threshold:   "
-                f"{best_threshold_result['threshold']:.2f}"
-            )
+        print(
+            f"Best threshold:   "
+            f"{best_threshold_result['threshold']:.2f}"
+        )
 
-            print(
-                f"Precision:        "
-                f"{best_threshold_result['precision']:.6f}"
-            )
+        print(
+            f"Precision:        "
+            f"{best_threshold_result['precision']:.6f}"
+        )
 
-            print(
-                f"Recall:           "
-                f"{best_threshold_result['recall']:.6f}"
-            )
+        print(
+            f"Recall:           "
+            f"{best_threshold_result['recall']:.6f}"
+        )
 
-            print(
-                f"F1:               "
-                f"{best_threshold_result['f1']:.6f}"
-            )
+        print(
+            f"F1:               "
+            f"{best_threshold_result['f1']:.6f}"
+        )
 
-            print(
-                f"IoU:              "
-                f"{best_threshold_result['iou']:.6f}"
-            )
+        print(
+            f"IoU:              "
+            f"{best_threshold_result['iou']:.6f}"
+        )
 
         if should_stop:
             if stop_reason == "early_stopping":

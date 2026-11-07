@@ -7,16 +7,12 @@ from torch import nn
 from satchange.models.bit import BIT
 from satchange.models.fc_siam_diff import FCSiamDiff
 from satchange.models.siam_mit_b3_diff import SiamMiTB3Diff
-from satchange.models.tiny_siamese_change_classifier import TinySiameseChangeClassifier
 
 BINARY_TASK = "binary_change_detection"
-SEMANTIC_TASK = "semantic_roi_classification"
 
 
 def model_class_for_task(model_name: str, task: str = BINARY_TASK) -> type[nn.Module]:
-    """Select a supported task contract without registering a classifier as a detector."""
-    if task == SEMANTIC_TASK and model_name == "tiny_siamese_change_classifier":
-        return TinySiameseChangeClassifier
+    """Select the model class for a supported task contract (binary change detection only)."""
     if task == BINARY_TASK and model_name in MODEL_REGISTRY:
         return MODEL_REGISTRY[model_name]
     raise ValueError(f"Unsupported model/task pair: {model_name}/{task}")

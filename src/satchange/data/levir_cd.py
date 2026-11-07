@@ -13,6 +13,10 @@ from torch.utils.data import (
     DataLoader,
 )
 from collections.abc import Callable
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from satchange.data.second_binary import SECONDBinaryDataset
 
 
 
@@ -499,18 +503,31 @@ def create_dataset_dataloader(
     drop_last: bool = False,
     generator: torch.Generator | None = None,
     seed: int | None = None,
-) -> tuple[LEVIRCDDataset, DataLoader]:
+) -> tuple["LEVIRCDDataset | SECONDBinaryDataset", DataLoader]:
     """Create one LEVIR-CD dataset split and its data loader."""
 
     if seed is not None and seed < 0:
         raise ValueError("seed cannot be negative.")
 
-    dataset = LEVIRCDDataset(
-        dataset_root=dataset_root,
-        split=split,
-        image_size=image_size,
-        transform=transform,
-    )
+    # A SECOND root with a frozen split manifest is binary change detection with the
+    # same sample contract (Research 2 WHERE stage); everything else is LEVIR-CD.
+    from satchange.data.second_binary import SECONDBinaryDataset, is_second_binary_root
+
+    dataset: LEVIRCDDataset | SECONDBinaryDataset
+    if is_second_binary_root(dataset_root):
+        dataset = SECONDBinaryDataset(
+            dataset_root=dataset_root,
+            split=split,
+            image_size=image_size,
+            transform=transform,
+        )
+    else:
+        dataset = LEVIRCDDataset(
+            dataset_root=dataset_root,
+            split=split,
+            image_size=image_size,
+            transform=transform,
+        )
 
     generator = None
 

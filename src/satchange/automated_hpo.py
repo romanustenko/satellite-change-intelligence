@@ -13,10 +13,12 @@ from pathlib import Path
 from typing import Any
 
 from .hpo_core import (
+    CodeCompatibilityError,
     Experiment,
     ParameterSearchMemoryError,
     PipelineRunError,
     PipelineSettings,
+    acknowledge_code_change,
     experiment_lock,
     load_backend,
 )
@@ -24,6 +26,8 @@ from .hpo_core import (
 __all__ = [
     "run_automated_parameter_search",
     "request_hpo_pause",
+    "acknowledge_code_change",
+    "CodeCompatibilityError",
     "ParameterSearchMemoryError",
     "PipelineRunError",
 ]
@@ -112,8 +116,9 @@ def run_automated_parameter_search(
     backend: str = "satchange.hpo_backend:SatelliteBackend",
     backend_context: Mapping[str, Any] | None = None,
     task: str = "binary_change_detection",
-    selection_gap: float = 0.04,
-    joint_tiebreaker: bool = False,
+    gpu_hour_budget: float | None = None,
+    budget_reason: str | None = None,
+    unverified_reuse: str = "refuse",
 ) -> dict[str, Any]:
     """Execute ONLY the requested phase, safely resumable from disk.
 
@@ -153,28 +158,26 @@ def run_automated_parameter_search(
 
     Other projects can copy hpo_core.py and provide an importable backend class
     conforming to its Backend protocol; this wrapper supplies project defaults.
+
+    Code compatibility (schema 4): the protocol records a per-file code manifest. Code that
+    affects training or experiment control must match the accepted code, otherwise the call
+    refuses; acknowledge_code_change records an evidence-backed exception. reuse_from and
+    resume_from sources are verified the same way. unverified_reuse='exploratory' reuses
+    COMPLETED results from unverified code, labelled exploratory_only; partial runs from
+    unverified code are never continued.
+
+    GPU-hours: every dispatch is an allocation in <search>/gpu_ledger.jsonl (dispatch to
+    completion x devices). gpu_hour_budget (allocated GPU-hours for this search directory) is
+    recorded in the ledger; None keeps a previously recorded budget. Trials that do not fit
+    are not dispatched; reaching the budget pauses active trials at the next epoch boundary
+    and any overshoot is recorded. Zero overshoot is not guaranteed.
     """
     import math
 
-    if task not in ("binary_change_detection", "semantic_roi_classification"):
+    if task != "binary_change_detection":
         raise ValueError(f"Unsupported task: {task}")
-    semantic = task == "semantic_roi_classification"
     if base_parameters.get("task", "binary_change_detection") != task:
         raise ValueError("The requested task differs from base_parameters.")
-    if type(joint_tiebreaker) is not bool:
-        raise ValueError("joint_tiebreaker must be boolean.")
-    if not math.isfinite(selection_gap) or not 0 <= selection_gap <= 1:
-        raise ValueError("selection_gap must be in [0, 1].")
-    if semantic and thresholds:
-        raise ValueError("Semantic ROI classification uses no segmentation thresholds.")
-    if semantic and any(
-        key in {"task", "semantic_config", "prepared_identity", "class_weights"}
-        or key == "model__classes"
-        or key.startswith("semantic_config__")
-        for _, space in stages
-        for key in space
-    ):
-        raise ValueError("Keep the semantic taxonomy, data and class weights fixed during HPO.")
 
     epochs = _budgets(stage_epochs)
     names = [name for name, _ in stages]
@@ -227,7 +230,7 @@ def run_automated_parameter_search(
         or (patience is not None and min_epochs > epochs["hpo"])
     ):
         raise ValueError("Invalid min_epochs for HPO.")
-    if not semantic and (
+    if (
         not thresholds
         or any(isinstance(t, bool) or not math.isfinite(t) or not 0 < t < 1 for t in thresholds)
     ):
@@ -245,6 +248,15 @@ def run_automated_parameter_search(
             raise ValueError(f"Invalid {name}.")
     if max_oom_attempts is not None and (type(max_oom_attempts) is not int or max_oom_attempts < 1):
         raise ValueError("max_oom_attempts must be positive or None for unlimited retries.")
+    if gpu_hour_budget is not None and (
+        isinstance(gpu_hour_budget, bool)
+        or not isinstance(gpu_hour_budget, (int, float))
+        or not math.isfinite(gpu_hour_budget)
+        or gpu_hour_budget <= 0
+    ):
+        raise ValueError("gpu_hour_budget must be a positive finite number of GPU-hours or None.")
+    if unverified_reuse not in ("refuse", "exploratory"):
+        raise ValueError("unverified_reuse must be 'refuse' or 'exploratory'.")
     root = Path(output_root).expanduser().resolve() / search_name
     if (root / "automated_hpo_protocol.json").exists():
         raise ValueError("Use a NEW search_name for v3; pass the old experiment via reuse_from.")
@@ -255,8 +267,6 @@ def run_automated_parameter_search(
         thresholds=list(thresholds),
         allow_legacy_import=allow_legacy_import,
     )
-    if semantic:
-        context["task"] = task
     adapter = load_backend(backend)
     base = adapter.normalize(base_parameters)
     adapter.validate(base, context)
@@ -264,7 +274,7 @@ def run_automated_parameter_search(
         name: None
         if count is None
         else {
-            "monitor": "selection_score" if semantic else "validation_f1",
+            "monitor": "validation_f1",
             "patience": count,
             "min_epochs": min_epochs if name == "hpo" else 1,
             "min_delta": float(min_delta),
@@ -281,14 +291,8 @@ def run_automated_parameter_search(
         policies=policies,
         seeds=list(seeds),
         devices=list(devices),
-        metrics=(
-            ("selection_score", "joint_accuracy") if joint_tiebreaker else ("selection_score",)
-        )
-        if semantic
-        else ("f1", "iou"),
-        gaps={"selection_score": selection_gap, "joint_accuracy": 1.0}
-        if semantic
-        else {"f1": f1_gap, "iou": iou_gap},
+        metrics=("f1", "iou"),
+        gaps={"f1": f1_gap, "iou": iou_gap},
         reuse_from=_paths(reuse_from),
         checkpoints=_paths(resume_from),
         additional_seeds=additional_seeds,
@@ -298,6 +302,9 @@ def run_automated_parameter_search(
         memory_margin_mib=oom_retry_memory_margin_mb,
         max_oom_attempts=max_oom_attempts,
         verbose=verbose,
+        gpu_hour_budget=None if gpu_hour_budget is None else float(gpu_hour_budget),
+        budget_reason=budget_reason,
+        unverified_reuse=unverified_reuse,
     )
     with experiment_lock(root):
         return Experiment(settings).run(
