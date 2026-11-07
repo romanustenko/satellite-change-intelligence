@@ -176,7 +176,7 @@ Deliberately uncommitted user files: `notebooks/research_1/02_fc_siam_diff_full_
 2. R2-P05-T01: SECOND downloaded (existing `bootstrap_second` download path) and installed by hand in
    `data/SECOND` (git-ignored). Release is nested (`SECOND_total_test.zip` → `test/`,
    `SECOND_train_set.rar` → `train/`); `bootstrap_second` cannot unpack it; I used Windows
-   `C:\Windows\System32	ar.exe` (bsdtar, reads RAR). Nested SHA256 in `data/SECOND/source.json`.
+   `C:\Windows\System32\tar.exe` (bsdtar, reads RAR). Nested SHA256 in `data/SECOND/source.json`.
 3. Audit script `src/scripts/second_audit.py` → `docs/research2/second_audit.json` (counts, class
    shares, duplicates, near-duplicate/adjacent-edge candidates, `merged_groups`;
    `source_groups_from_report()` rebuilds the full group map).
