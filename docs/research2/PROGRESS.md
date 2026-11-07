@@ -54,7 +54,7 @@ No Research 2 code, notebooks, datasets, training or HPO exist yet.
 2. Rules for selecting Research 1 checkpoints (D-012; principles in D-010 approved).
 3. Full-system GPU budget policy (D-004); numbers after pilot (D-005).
 4. Primary accuracy–efficiency criteria and decision rules (D-014, D-015).
-5. SECOND split structure → validation/test creation (D-008, D-009) — needs R2-P05-T01 facts.
+5. ~~SECOND split structure (D-008, D-009)~~ — resolved 2026-11-07 (see Update 2026-11-07).
 6. General augmentation/noise (D-018) — proposed: disabled.
 7. Hypothesis formulations (D-002), pilot target (D-024), seeds/statistics (D-025), benchmarking (D-026).
 8. HPO compatibility design review (D-022, G9) once R2-P06-T01 is delivered.
@@ -133,3 +133,27 @@ Locally executable, approved implementation work is exhausted. Remaining work ne
   (splits), D-024 (pilot target), D-005 (budget, after pilot).
 Next step that can proceed without data: R2-P05-T03 notebook skeleton (guarded, unexecuted) once
 D-008/D-009 are decided; R2-P08-T02/T03 design can start in parallel.
+
+## Update 2026-11-07 — R2-P05-T01 completed, SECOND splits decided
+
+- **Installed** `data/SECOND` (git-ignored; 3.79 GB archive downloaded with the existing
+  `bootstrap_second` download path). The release is nested (`SECOND_total_test.zip` →
+  `test/`, `SECOND_train_set.rar` → `train/`), which `bootstrap_second` cannot extract; installed
+  by hand with bsdtar into the layout `discover_second` expects; nested archive SHA256 are in
+  `data/SECOND/source.json` (local, not author-published). Follow-up gap: teach `bootstrap_second`
+  the nested layout (touches `semantic/`; HPO signature; not urgent).
+- **Facts (observed):** train 2968 + test 1694 labeled pairs (= 4662), no official val; 512×512 RGB
+  tiles, RGB-colour labels (all pixels match `SECOND_COLORS`, 0 unknown); T1/T2 change support
+  identical in every tile; all six classes in both splits (playground rarest: 229 train / 101 test
+  tiles); 5 train tiles without change, 0 in test; ~20 % changed pixels in both splits.
+- **Leakage audit** (`second_audit.json`): 0 byte-identical images or shared stems; 2 near-duplicate
+  pairs (1 within train, 1 train/test: 04041↔04070); 10 weak adjacent-edge candidates (4 within
+  train, 6 train/test). Official IDs interleave train/test (random tile assignment, no geographic
+  metadata) → geographic independence cannot be verified; impact on the official test is
+  negligible (≤7 of 1694 tiles) and is reported, not repaired.
+- **Decisions:** D-008 val = 15 % of train groups (444 tiles), seed 2099, within-train candidate
+  pairs kept together; D-009 official test used. Manifest `data/SECOND/second_split_manifest.json`
+  (sha256 `7d46718c…`): train 2524 / val 444 / test 1694; verified test == official test, no overlap,
+  class presence proportional, loader reads all three splits.
+- **Next:** R2-P05-T03 notebook (unexecuted skeleton using `prepare_second_splits` and
+  `second_audit.py`); R2-P08-T03 pilot spec needs D-024.

@@ -19,8 +19,8 @@ source of implementation requirements but not of scientific decisions.
 | D-005 | Numerical GPU-hour limits | PROPOSED (deferred to pilot) |
 | D-006 | TinySiamese abandoned; remove remaining components | APPROVED |
 | D-007 | Official SECOND splits preferred; test excluded | APPROVED in principle (G3) |
-| D-008 | Validation split creation if missing | PROPOSED |
-| D-009 | Test split if official test labels unavailable | PROPOSED |
+| D-008 | Validation split creation if missing | APPROVED (delegated to evidence, 2026-11-07) |
+| D-009 | Test split if official test labels unavailable | RESOLVED — official labeled test exists (2026-11-07) |
 | D-010 | Versioned Research 1 checkpoint selection/freeze policy | APPROVED (principles) |
 | D-011 | Dedicated SECOND preparation notebook | APPROVED |
 | D-012 | Selection rules for WHERE models, ROI policies, checkpoints | PROPOSED (G5 not approved) |
@@ -115,7 +115,17 @@ source of implementation requirements but not of scientific decisions.
 - **Recommendation:** carve validation from official train only, fixed seed, group-disjoint,
   persisted manifest of sample IDs, sample counts reported; investigate tile adjacency/near-duplicates
   first. Fraction (15 % as in existing code, or another) to be decided with the data in hand.
-- **Status:** PROPOSED. **Impact:** R2-P05-T03/T04.
+- **Resolution (2026-11-07):** user delegated the choice to the installed data ("decide after
+  inspecting"; keep official splits unchanged; deterministic, documented, reusable). Evidence
+  (`second_audit.json`): official release = train 2968 + test 1694 labeled pairs, no val. Val is
+  15 % of train *groups* (444 tiles; train 2524), `split_seed=2099`, whole groups, group = filename
+  stem except 5 within-train near-duplicate/adjacent-edge candidate groups merged. Why 15 %: the
+  rarest class (playground) appears in only 229 train tiles; a 10 % val would hold ~14–24 of them
+  (seed-dependent), 15 % holds 23–48 (43 for seed 2099) and keeps 2524 train tiles. No stratification
+  (class presence in val matches train and test proportions). Manifest:
+  `data/SECOND/second_split_manifest.json`, sha256 `7d46718c…39b6`; frozen (never replaced).
+  Revisable only before any model is trained on SECOND.
+- **Status:** APPROVED (delegated). **Impact:** R2-P05-T03/T04.
 
 ### D-009 — Test split if official test labels are unavailable
 - **Source:** finding — `discover_second` treats an unlabeled `test` leaf as empty; public test-label
@@ -123,7 +133,10 @@ source of implementation requirements but not of scientific decisions.
 - **Alternatives:** (a) local labeled test from official train (group-disjoint, frozen early);
   (b) report only validation results (no confirmatory test) — scientifically weak.
 - **Recommendation:** (a), created once and frozen before any model development on SECOND.
-- **Status:** PROPOSED; requires explicit approval because it changes what "test" means.
+- **Resolution (2026-11-07):** the release contains a labeled official test (1694 pairs, all four
+  folders), so no local test is created; the official test is used unchanged (user answer: "official
+  test if labels exist"). Test stays untouched until the frozen final evaluation (G3).
+- **Status:** RESOLVED (option: official test).
 
 ### D-010 — Versioned Research 1 checkpoint selection policy
 - **Source:** U-2026-11-06 §1.

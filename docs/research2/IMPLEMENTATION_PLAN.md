@@ -222,7 +222,7 @@ tests, configs and docs are not part of the signature.
 - **Acceptance:** counts and label values observed, not assumed.
 - **Validation:** checksums recorded in `source.json`.
 - **Complexity:** Low. **Tokens:** 15–40k. **GPU:** none.
-- **Risks:** quota/auth failures of Google Drive. **Approval:** download authorization. **Status:** NOT STARTED.
+- **Risks:** quota/auth failures of Google Drive. **Approval:** download authorization. **Status:** COMPLETED 2026-11-07 — installed in `data/SECOND` (release is nested: `SECOND_total_test.zip` + `SECOND_train_set.rar`, which `bootstrap_second` cannot unpack; installed by hand with bsdtar, nested SHA256 in `source.json`); audit in `docs/research2/second_audit.json` (`src/scripts/second_audit.py`).
 
 ### R2-P05-T02 — Decouple split/conversion from the ROI-classifier preparation
 - **Scientific purpose:** shared, model-independent split manifests and decoded labels for every Research 2 model.
@@ -248,7 +248,7 @@ tests, configs and docs are not part of the signature.
 - **Acceptance:** fresh-kernel syntax test passes; expensive cells guarded; unexecuted steps stated.
 - **Validation:** `tests/test_notebooks.py`; CPU run of non-download cells on synthetic layout if feasible.
 - **Complexity:** Medium. **Tokens:** 50–120k. **GPU:** none.
-- **Risks:** duplicating `second.py` logic in the notebook. **Approval:** D-008/D-009. **Status:** BLOCKED.
+- **Risks:** duplicating `second.py` logic in the notebook. **Approval:** D-008/D-009 (decided 2026-11-07). **Status:** NOT STARTED (unblocked).
 
 ### R2-P05-T04 — Execute preparation and freeze the dataset manifest
 - **Scientific purpose:** frozen splits used by every model.

@@ -1,0 +1,177 @@
+{
+ "candidates_across_splits": [
+  {
+   "a": "train/04041",
+   "b": "test/04070",
+   "kind": "near_duplicate",
+   "t1_mad": 1.866
+  },
+  {
+   "a": "train/02082",
+   "b": "test/02120",
+   "edge_mad": 2.911,
+   "kind": "adjacent_right_left"
+  },
+  {
+   "a": "train/02301",
+   "b": "test/02317",
+   "edge_mad": 2.962,
+   "kind": "adjacent_right_left"
+  },
+  {
+   "a": "train/02589",
+   "b": "test/02648",
+   "edge_mad": 2.377,
+   "kind": "adjacent_right_left"
+  },
+  {
+   "a": "train/02660",
+   "b": "test/02675",
+   "edge_mad": 2.704,
+   "kind": "adjacent_right_left"
+  },
+  {
+   "a": "test/02656",
+   "b": "train/02608",
+   "edge_mad": 2.59,
+   "kind": "adjacent_right_left"
+  },
+  {
+   "a": "test/02659",
+   "b": "train/02591",
+   "edge_mad": 2.568,
+   "kind": "adjacent_right_left"
+  }
+ ],
+ "candidates_within_train": [
+  {
+   "a": "train/03995",
+   "b": "train/04063",
+   "kind": "near_duplicate",
+   "t1_mad": 1.605
+  },
+  {
+   "a": "train/00871",
+   "b": "train/00468",
+   "edge_mad": 2.419,
+   "kind": "adjacent_right_left"
+  },
+  {
+   "a": "train/02323",
+   "b": "train/02299",
+   "edge_mad": 2.965,
+   "kind": "adjacent_right_left"
+  },
+  {
+   "a": "train/02553",
+   "b": "train/02517",
+   "edge_mad": 2.725,
+   "kind": "adjacent_right_left"
+  },
+  {
+   "a": "train/04784",
+   "b": "train/04950",
+   "edge_mad": 2.923,
+   "kind": "adjacent_right_left"
+  }
+ ],
+ "exact_duplicate_groups": {
+  "md5_after": [],
+  "md5_before": []
+ },
+ "kind": "second_audit",
+ "merged_groups": [
+  [
+   "train/00468",
+   "train/00871"
+  ],
+  [
+   "train/02299",
+   "train/02323"
+  ],
+  [
+   "train/02517",
+   "train/02553"
+  ],
+  [
+   "train/03995",
+   "train/04063"
+  ],
+  [
+   "train/04784",
+   "train/04950"
+  ]
+ ],
+ "summary": {
+  "test": {
+   "change_support_mismatch": 0,
+   "label1_pixel_share": {
+    "buildings": 0.02936,
+    "low vegetation": 0.05859,
+    "no_change": 0.79933,
+    "non-vegetated ground surface": 0.09843,
+    "playgrounds": 0.00067,
+    "tree": 0.01087,
+    "water": 0.00274
+   },
+   "label2_pixel_share": {
+    "buildings": 0.09925,
+    "low vegetation": 0.0326,
+    "no_change": 0.79933,
+    "non-vegetated ground surface": 0.05173,
+    "playgrounds": 0.00185,
+    "tree": 0.01299,
+    "water": 0.00225
+   },
+   "mean_change_fraction": 0.2007,
+   "tiles": 1694,
+   "tiles_with_class": {
+    "buildings": 1681,
+    "low vegetation": 1471,
+    "non-vegetated ground surface": 1687,
+    "playgrounds": 101,
+    "tree": 989,
+    "water": 373
+   },
+   "tiles_without_change": 0
+  },
+  "train": {
+   "change_support_mismatch": 0,
+   "label1_pixel_share": {
+    "buildings": 0.03139,
+    "low vegetation": 0.06489,
+    "no_change": 0.80061,
+    "non-vegetated ground surface": 0.08554,
+    "playgrounds": 0.00075,
+    "tree": 0.01407,
+    "water": 0.00276
+   },
+   "label2_pixel_share": {
+    "buildings": 0.08609,
+    "low vegetation": 0.03387,
+    "no_change": 0.80061,
+    "non-vegetated ground surface": 0.05811,
+    "playgrounds": 0.00168,
+    "tree": 0.01714,
+    "water": 0.0025
+   },
+   "mean_change_fraction": 0.1994,
+   "tiles": 2968,
+   "tiles_with_class": {
+    "buildings": 2920,
+    "low vegetation": 2663,
+    "non-vegetated ground surface": 2958,
+    "playgrounds": 229,
+    "tree": 1865,
+    "water": 800
+   },
+   "tiles_without_change": 5
+  }
+ },
+ "thresholds": {
+  "edge_max_mad": 3.0,
+  "edge_max_ratio": 0.5,
+  "near_duplicate_max_mad": 5.0,
+  "near_duplicate_thumb_similarity": 0.95
+ }
+}
