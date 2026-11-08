@@ -1,4 +1,9 @@
-"""Research 2 system A: single-stage dense semantic change detection on SECOND (D-038).
+"""Research 2 semantic change detection on SECOND (D-038): system A and the WHAT stage of B.
+
+``--stage full`` trains system A on whole scenes; ``--stage what`` trains the WHAT classifier on
+fixed windows inside ground-truth ROI crops (``semantic.what_stage``) and then reports scene-level
+SeK/mIoU/Fscd with oracle ROIs on the validation split. ``--model`` selects any model registered
+for the semantic task.
 
 Thin driver over the shared engine (``fit_binary_change_model(task="semantic_change_detection")``);
 no new trainer. FC-Siam-Diff with 14 output channels, optional LEVIR-CD initialization (head
@@ -16,15 +21,26 @@ from pathlib import Path
 
 import numpy as np
 import torch
+from torch.utils.data import DataLoader
 
 from satchange.data.levir_cd import create_dataset_dataloader
 from satchange.data.transforms import RandomFlipRotate
 from satchange.execution import resolve_device, seed_everything
 from satchange.hpo_backend import _load_initial_weights
-from satchange.models.factory import SEMANTIC_OUTPUT_CHANNELS, SEMANTIC_TASK, create_task_model
+from satchange.models.factory import (
+    SEMANTIC_MODELS,
+    SEMANTIC_OUTPUT_CHANNELS,
+    SEMANTIC_TASK,
+    create_task_model,
+)
 from satchange.semantic.scd_training import NUM_CLASSES, SemanticSCDLoss
 from satchange.semantic.second import decode_label
-from satchange.training import fit_binary_change_model
+from satchange.semantic.what_stage import (
+    ROICropDataset,
+    evaluate_what_pipeline,
+    ground_truth_roi_index,
+)
+from satchange.training import _best_weights, fit_binary_change_model
 
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT.parent / "satellite-change-intelligence" / "data" / "SECOND"
@@ -55,6 +71,8 @@ def class_frequencies(dataset: object) -> list[float]:
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", type=int, required=True)
+    parser.add_argument("--model", choices=SEMANTIC_MODELS, default="fc_siam_diff")
+    parser.add_argument("--stage", choices=("full", "what"), default="full")
     parser.add_argument("--seed", type=int, default=42)
     parser.add_argument("--lr", type=float, default=1e-3)
     parser.add_argument("--epochs", type=int, default=40)
@@ -70,19 +88,36 @@ def main() -> None:
     seed_everything(args.seed)
     transform = RandomFlipRotate(extra_keys=("before_label", "after_label"))
     train_data, train_loader = create_dataset_dataloader(
-        DATA, "train", None, args.batch_size, args.num_workers, transform=transform,
+        DATA, "train", None, args.batch_size, args.num_workers,
+        transform=None if args.stage == "what" else transform,
         shuffle=True, pin_memory=True, seed=args.seed, semantic_labels=True,
     )
-    _, validation_loader = create_dataset_dataloader(
+    validation_data, validation_loader = create_dataset_dataloader(
         DATA, "val", None, args.batch_size, args.num_workers, pin_memory=True,
         semantic_labels=True,
     )
+    if args.stage == "what":
+        train_crops = ROICropDataset(
+            train_data, ground_truth_roi_index(train_data), random_window=True,
+            transform=transform,
+        )
+        validation_crops = ROICropDataset(
+            validation_data, ground_truth_roi_index(validation_data),
+        )
+        generator = torch.Generator().manual_seed(args.seed)
+        train_loader = DataLoader(
+            train_crops, args.batch_size, shuffle=True, num_workers=args.num_workers,
+            pin_memory=True, generator=generator, drop_last=False,
+        )
+        validation_loader = DataLoader(
+            validation_crops, args.batch_size, num_workers=args.num_workers, pin_memory=True,
+        )
     weights = None
     if args.class_weights == "sqrt_inverse":
         frequency = np.maximum(np.array(class_frequencies(train_data)), 1e-6)
         raw = frequency ** -0.5
         weights = (raw / raw.mean()).tolist()
-    model = create_task_model("fc_siam_diff", MODEL_PARAMETERS, SEMANTIC_TASK)
+    model = create_task_model(args.model, MODEL_PARAMETERS, SEMANTIC_TASK)
     initialization = None
     if args.init == "levir":
         spec = {
@@ -94,7 +129,8 @@ def main() -> None:
     loss_function = SemanticSCDLoss(weights).to(device)
     optimizer = torch.optim.AdamW(model.parameters(), lr=args.lr, weight_decay=1e-4)
     config = {
-        "task": SEMANTIC_TASK, "model_parameters": MODEL_PARAMETERS, "seed": args.seed,
+        "task": SEMANTIC_TASK, "stage": args.stage, "model": args.model,
+        "model_parameters": MODEL_PARAMETERS, "seed": args.seed,
         "learning_rate": args.lr, "batch_size": args.batch_size, "init": args.init,
         "class_weights": weights, "epochs": args.epochs, "initial_weights": initialization,
     }
@@ -102,13 +138,21 @@ def main() -> None:
     history = fit_binary_change_model(
         model=model, train_loader=train_loader, validation_loader=validation_loader,
         loss_function=loss_function, optimizer=optimizer, device=device,
-        number_of_epochs=args.epochs, thresholds=[], output_root=OUTPUT, model_name="fc_siam_diff",
+        number_of_epochs=args.epochs, thresholds=[], output_root=OUTPUT, model_name=args.model,
         run_name=args.name, checkpoint_interval=5, config=config, task=SEMANTIC_TASK,
     )
     seconds = time.perf_counter() - started
     best = max(history, key=lambda row: row["selection_score"])
+    scene_metrics = None
+    if args.stage == "what":
+        last = OUTPUT / args.model / args.name / "last.pt"
+        state = torch.load(last, map_location="cpu", weights_only=False)
+        model.load_state_dict(_best_weights(state, last))  # best epoch, never the last
+        scene_metrics = evaluate_what_pipeline(model, validation_data, device)
     record = {
-        "name": args.name, "gpu": args.gpu, "seed": args.seed, "lr": args.lr, "init": args.init,
+        "name": args.name, "stage": args.stage, "model": args.model,
+        "oracle_scene_metrics": scene_metrics, "gpu": args.gpu, "seed": args.seed,
+        "lr": args.lr, "init": args.init,
         "class_weights": args.class_weights, "epochs": len(history), "wall_hours": seconds / 3600,
         "gpu_hours": seconds / 3600, "best_epoch": best["epoch"], "best_sek": best["sek"],
         "best_miou": best["miou"], "best_fscd": best["fscd"],
