@@ -9,7 +9,6 @@ from torch.utils.data import DataLoader
 from satchange.data.transforms import RandomFlipRotate
 from satchange.models import FCSiamDiff
 from satchange.models.factory import SEMANTIC_TASK, create_task_model
-from satchange.training import fit_binary_change_model
 from satchange.semantic.scd_training import (
     NUM_CLASSES,
     SemanticSCDLoss,
@@ -17,6 +16,7 @@ from satchange.semantic.scd_training import (
     run_epoch,
     split_logits,
 )
+from satchange.training import fit_binary_change_model
 
 
 def _loader(batches: int = 3, size: int = 16) -> list[dict[str, torch.Tensor]]:

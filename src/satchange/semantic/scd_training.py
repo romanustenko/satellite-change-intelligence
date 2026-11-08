@@ -1,4 +1,4 @@
-"""Dense semantic change detection adapters (loss, epoch runner); orchestration stays in training.py.
+"""Dense semantic change detection adapters (loss, epoch runner); orchestration: training.py.
 
 Logit layout: ``[B, 2 * K, H, W]`` with K = 7 classes (0 = no change). Channels ``0..K-1`` are the
 T1 map, ``K..2K-1`` the T2 map. Selection score = SeK on the validation split (D-014).
