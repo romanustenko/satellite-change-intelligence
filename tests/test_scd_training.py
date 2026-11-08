@@ -150,3 +150,16 @@ def test_shared_engine_fits_and_resumes_semantic_task(tmp_path: Path) -> None:
     assert len(resumed) == 3
     with pytest.raises(ValueError, match="no thresholds"):
         fit_binary_change_model(number_of_epochs=1, **{**kwargs, "thresholds": [0.5]})  # type: ignore[arg-type]
+
+
+def test_deterministic_cross_entropy_equals_torch_reference() -> None:
+    logits = torch.randn(2, 14, 5, 6)
+    label = torch.randint(0, 7, (2, 5, 6))
+    weights = [0.5, 1.0, 2.0, 1.5, 3.0, 0.7, 4.0]
+    loss = SemanticSCDLoss(weights)(logits, label, label.flip(-1))
+    reference = torch.nn.functional.cross_entropy(
+        logits[:, :7], label, weight=torch.tensor(weights)
+    ) + torch.nn.functional.cross_entropy(
+        logits[:, 7:], label.flip(-1), weight=torch.tensor(weights)
+    )
+    assert torch.allclose(loss, reference, atol=1e-6)

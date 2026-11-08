@@ -40,9 +40,25 @@ class SemanticSCDLoss(nn.Module):
         first, second = split_logits(logits)
         weights = self.weights
         assert weights is None or isinstance(weights, torch.Tensor)
-        return F.cross_entropy(first.float(), before_label, weight=weights) + F.cross_entropy(
-            second.float(), after_label, weight=weights
+        return _cross_entropy(first, before_label, weights) + _cross_entropy(
+            second, after_label, weights
         )
+
+
+def _cross_entropy(
+    logits: torch.Tensor, labels: torch.Tensor, weights: torch.Tensor | None
+) -> torch.Tensor:
+    """Weighted-mean pixel CE from deterministic ops (``nll_loss2d`` is nondeterministic on CUDA).
+
+    Equals ``F.cross_entropy(logits, labels, weight=weights)`` with ``reduction="mean"``.
+    """
+    log_probability = F.log_softmax(logits.float(), dim=1)
+    one_hot = F.one_hot(labels, NUM_CLASSES).permute(0, 3, 1, 2).to(log_probability.dtype)
+    negative = -(log_probability * one_hot).sum(dim=1)
+    if weights is None:
+        return negative.mean()
+    pixel_weights = weights.to(log_probability.dtype)[labels]
+    return (negative * pixel_weights).sum() / pixel_weights.sum()
 
 
 def split_logits(logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:

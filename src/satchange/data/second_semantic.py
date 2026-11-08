@@ -1,9 +1,10 @@
 """SECOND dense semantic change detection (Research 2 system A and WHAT-stage labels).
 
 Same manifest-defined samples as ``SECONDBinaryDataset`` (frozen splits, hash-checked files)
-plus the decoded T1/T2 class maps. Class ids are canonical: 0 = no change, 1..6 = the
-SECOND land-cover classes (``semantic.second.SECOND_CLASSES`` order). A sample adds ``before_label`` and
-``after_label`` (int64 ``[H,W]``) to the binary contract; ``mask`` stays the binary change map.
+plus the decoded T1/T2 class maps. Class ids are canonical: 0 = no change, 1..6 =
+the SECOND land-cover classes (``semantic.second.SECOND_CLASSES`` order). A sample adds
+``before_label`` and ``after_label`` (int64 ``[H,W]``) to the binary contract; ``mask`` stays the
+binary change map.
 """
 
 from typing import Any
