@@ -503,6 +503,7 @@ def create_dataset_dataloader(
     drop_last: bool = False,
     generator: torch.Generator | None = None,
     seed: int | None = None,
+    semantic_labels: bool = False,
 ) -> tuple["LEVIRCDDataset | SECONDBinaryDataset", DataLoader]:
     """Create one LEVIR-CD dataset split and its data loader."""
 
@@ -514,7 +515,18 @@ def create_dataset_dataloader(
     from satchange.data.second_binary import SECONDBinaryDataset, is_second_binary_root
 
     dataset: LEVIRCDDataset | SECONDBinaryDataset
-    if is_second_binary_root(dataset_root):
+    if semantic_labels:
+        from satchange.data.second_semantic import SECONDSemanticDataset
+
+        if not is_second_binary_root(dataset_root):
+            raise ValueError("semantic_labels requires a SECOND root with a split manifest.")
+        dataset = SECONDSemanticDataset(
+            dataset_root=dataset_root,
+            split=split,
+            image_size=image_size,
+            transform=transform,
+        )
+    elif is_second_binary_root(dataset_root):
         dataset = SECONDBinaryDataset(
             dataset_root=dataset_root,
             split=split,
