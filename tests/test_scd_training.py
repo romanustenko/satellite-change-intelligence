@@ -163,3 +163,19 @@ def test_deterministic_cross_entropy_equals_torch_reference() -> None:
         logits[:, 7:], label.flip(-1), weight=torch.tensor(weights)
     )
     assert torch.allclose(loss, reference, atol=1e-6)
+
+
+def test_fc_siam_semantic_is_date_aware_while_diff_model_is_symmetric() -> None:
+    torch.manual_seed(0)
+    before, after = torch.rand(1, 3, 32, 32), torch.rand(1, 3, 32, 32)
+    parameters = {"out_channels": 14, "base_channels": 8}
+    diff = create_task_model("fc_siam_diff", parameters, SEMANTIC_TASK)
+    semantic = create_task_model("fc_siam_semantic", parameters, SEMANTIC_TASK)
+    diff.eval(), semantic.eval()
+    with torch.no_grad():
+        assert torch.allclose(diff(before, after), diff(after, before), atol=1e-5)
+        out = semantic(before, after)
+        assert out.shape == (1, 14, 32, 32)
+        assert not torch.allclose(out, semantic(after, before), atol=1e-4)
+    encoder_keys = {k for k in diff.state_dict() if k.startswith("encoder_blocks")}
+    assert encoder_keys <= set(semantic.state_dict())  # LEVIR encoder init stays possible

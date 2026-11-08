@@ -50,6 +50,10 @@ LEVIR_CHECKPOINT = (
     DATA.parents[1] / "artifacts/final_models/light_full/seed_123_best.pt"
 )
 OUTPUT = DATA.parents[1] / "artifacts/research2/scd"
+EXCLUDE = {  # LEVIR-CD keys whose shapes differ in the semantic model
+    "fc_siam_diff": ["output_layer"],
+    "fc_siam_semantic": ["output_layer", "upconvs", "decoder_blocks"],
+}
 MODEL_PARAMETERS = {"in_channels": 3, "out_channels": SEMANTIC_OUTPUT_CHANNELS, "base_channels": 32}
 
 
@@ -121,7 +125,7 @@ def main() -> None:
     initialization = None
     if args.init == "levir":
         spec = {
-            "path": str(LEVIR_CHECKPOINT), "exclude": ["output_layer"],
+            "path": str(LEVIR_CHECKPOINT), "exclude": EXCLUDE[args.model],
             "sha256": hashlib.sha256(LEVIR_CHECKPOINT.read_bytes()).hexdigest(),
         }
         initialization = _load_initial_weights(model, spec)

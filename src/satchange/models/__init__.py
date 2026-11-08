@@ -3,12 +3,14 @@
 from satchange.models.bit import BIT
 from satchange.models.factory import count_model_parameters, create_change_model, create_task_model
 from satchange.models.fc_siam_diff import FCSiamDiff
+from satchange.models.fc_siam_semantic import FCSiamSemantic
 from satchange.models.siam_mit_b3_diff import SiamMiTB3Diff
 
 __all__ = [
     "SiamMiTB3Diff",
     "BIT",
     "FCSiamDiff",
+    "FCSiamSemantic",
     "count_model_parameters",
     "create_change_model",
     "create_task_model",
