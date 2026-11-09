@@ -100,10 +100,12 @@ def main() -> None:
     rows = []
     for position in chosen:
         sample = dataset[index_of[ids[position]]]
-        report_a = benchmark_system_a(a_model, sample["before"], sample["after"], device,
+        before_image = torch.as_tensor(sample["before"])
+        after_image = torch.as_tensor(sample["after"])
+        report_a = benchmark_system_a(a_model, before_image, after_image, device,
                                       warmup=args.warmup, repetitions=args.repetitions)
         report_b = benchmark_system_b(
-            detector, what, sample["before"], sample["after"], device,
+            detector, what, before_image, after_image, device,
             detector_input_size=(side, side), threshold=settings.threshold, settings=settings,
             warmup=args.warmup, repetitions=args.repetitions,
         )
