@@ -107,7 +107,7 @@ def predict_roi_logits(model: torch.nn.Module, roi: ROI, device: torch.device) -
         batch = tensor.unsqueeze(0).to(device)
         return F.pad(batch, (0, pad_w, 0, pad_h), mode="reflect") if pad_h or pad_w else batch
 
-    logits = model(pad(roi.before), pad(roi.after)).float()[0, :, :height, :width]
+    logits: torch.Tensor = model(pad(roi.before), pad(roi.after)).float()[0, :, :height, :width]
     return logits
 
 

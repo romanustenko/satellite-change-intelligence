@@ -101,7 +101,8 @@ def benchmark_system_a(
 
         def forward() -> torch.Tensor:
             with precision_context(device, precision):
-                return model(*inputs).float()
+                logits: torch.Tensor = model(*inputs).float()
+                return logits
 
         logits = timer.run("forward", forward)
         return timer.run("argmax_d2h", lambda: [m.cpu() for m in predict_maps(logits)])

@@ -24,6 +24,7 @@ import torch
 from torch.utils.data import DataLoader
 
 from satchange.data.levir_cd import create_dataset_dataloader
+from satchange.data.second_semantic import SECONDSemanticDataset
 from satchange.data.transforms import RandomFlipRotate
 from satchange.execution import resolve_device, seed_everything
 from satchange.hpo_backend import _load_initial_weights
@@ -100,6 +101,8 @@ def main() -> None:
         DATA, "val", None, args.batch_size, args.num_workers, pin_memory=True,
         semantic_labels=True,
     )
+    assert isinstance(train_data, SECONDSemanticDataset)
+    assert isinstance(validation_data, SECONDSemanticDataset)
     if args.stage == "what":
         train_crops = ROICropDataset(
             train_data, ground_truth_roi_index(train_data), random_window=True,

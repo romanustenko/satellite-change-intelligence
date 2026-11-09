@@ -36,7 +36,7 @@ def metrics_from_histogram(hist: np.ndarray) -> dict[str, float]:
 def paired_bootstrap(
     histograms_a: np.ndarray, histograms_b: np.ndarray, *, metric: str = "sek",
     resamples: int = 2000, seed: int = 0, confidence: float = 0.95,
-) -> dict[str, float]:
+) -> dict[str, float | int | str]:
     """Paired scene bootstrap of ``metric(A) - metric(B)``; histograms are ``[scenes,K,K]``."""
     if histograms_a.shape != histograms_b.shape or histograms_a.ndim != 3:
         raise ValueError("Paired histograms must share the shape [scenes,K,K].")

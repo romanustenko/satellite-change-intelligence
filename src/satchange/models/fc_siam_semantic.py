@@ -42,4 +42,5 @@ class FCSiamSemantic(FCSiamDiff):
             torch.cat([a, b, (a - b).abs()], dim=1)
             for a, b in zip(first, second, strict=True)
         ]
-        return self.output_layer(self._decode(fused))
+        output: torch.Tensor = self.output_layer(self._decode(fused))
+        return output

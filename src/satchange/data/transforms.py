@@ -58,10 +58,12 @@ class RandomFlipRotate:
         if not isinstance(mask, torch.Tensor):
             raise ValueError("sample['mask'] must be a tensor.")
 
-        extras = {key: sample[key] for key in self.extra_keys}
-        for key, value in extras.items():
+        extras: dict[str, torch.Tensor] = {}
+        for key in self.extra_keys:
+            value = sample[key]
             if not isinstance(value, torch.Tensor):
                 raise ValueError(f"sample[{key!r}] must be a tensor.")
+            extras[key] = value
 
         if torch.rand(1).item() < self.horizontal_flip_probability:
             extras = {k: torch.flip(v, dims=(-1,)) for k, v in extras.items()}
