@@ -14,7 +14,7 @@ from typing import Any
 
 import torch
 from torch.nn import functional as F
-from torch.utils.data import Dataset
+from torch.utils.data import DataLoader, Dataset
 
 from satchange.data.second_semantic import SECONDSemanticDataset
 from satchange.semantic.roi import DEFAULT_ROI_SETTINGS, ROI, ROISettings, extract_rois
@@ -39,6 +39,60 @@ def ground_truth_roi_index(
     return entries
 
 
+def ground_truth_roi_boxes(
+    dataset: SECONDSemanticDataset, settings: ROISettings = DEFAULT_ROI_SETTINGS
+) -> list[tuple[int, int, tuple[int, int, int, int]]]:
+    """``(sample index, ROI ordinal, crop bbox)`` for every ground-truth change component."""
+    entries: list[tuple[int, int, tuple[int, int, int, int]]] = []
+    for index, sample_id in enumerate(dataset.sample_ids):
+        mask = dataset._change(sample_id)
+        scene = torch.zeros(3, *mask.shape[-2:])
+        for ordinal, roi in enumerate(extract_rois(scene, scene, mask, settings)):
+            entries.append((index, ordinal, roi.crop_bbox))
+    return entries
+
+
+class PreloadedSemanticDataset(Dataset):
+    """In-RAM uint8 copy of a ``SECONDSemanticDataset`` split; items equal the source's.
+
+    The ROI window loader would otherwise decode a whole 512x512 tile (about 0.25 s) for every
+    128x128 window. Images are exact multiples of 1/255, labels are class ids <= 6 and the mask is
+    binary, so the uint8 round trip is lossless.
+    """
+
+    def __init__(self, base: SECONDSemanticDataset, *, num_workers: int = 8) -> None:
+        if base.transform is not None:
+            raise ValueError("The base dataset must not carry a transform.")
+        self.sample_ids = list(base.sample_ids)
+        self.transform = None
+        loader = DataLoader(base, batch_size=None, num_workers=num_workers)
+        self._items: list[dict[str, Any]] = []
+        for sample in loader:
+            item: dict[str, Any] = {"sample_id": sample["sample_id"]}
+            for key in ("before", "after"):
+                scaled = (sample[key] * 255).round()
+                if not torch.equal(scaled / 255, sample[key]):
+                    raise ValueError(f"{key} is not a uint8 image: {sample['sample_id']}")
+                item[key] = scaled.to(torch.uint8)
+            item["mask"] = sample["mask"].to(torch.uint8)
+            for key in LABEL_KEYS:
+                item[key] = sample[key].to(torch.uint8)
+            self._items.append(item)
+
+    def __len__(self) -> int:
+        return len(self._items)
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        item = self._items[index]
+        return {
+            "before": item["before"].float() / 255,
+            "after": item["after"].float() / 255,
+            "mask": item["mask"].float(),
+            "sample_id": item["sample_id"],
+            **{key: item[key].long() for key in LABEL_KEYS},
+        }
+
+
 class ROICropDataset(Dataset):
     """Fixed ``window`` x ``window`` windows inside ground-truth ROI crops.
 
@@ -56,12 +110,15 @@ class ROICropDataset(Dataset):
         window: int = WINDOW,
         random_window: bool = False,
         transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        boxes: list[tuple[int, int, int, int]] | None = None,
     ) -> None:
         if base.transform is not None:
             raise ValueError("The base dataset must not carry a transform.")
         if window > settings.min_crop_size:
             raise ValueError("window cannot exceed the minimum ROI crop size.")
-        self.base, self.entries, self.settings = base, entries, settings
+        if boxes is not None and len(boxes) != len(entries):
+            raise ValueError("boxes must align with entries.")
+        self.base, self.entries, self.settings, self.boxes = base, entries, settings, boxes
         self.window, self.random_window, self.transform = window, random_window, transform
 
     def __len__(self) -> int:
@@ -78,9 +135,11 @@ class ROICropDataset(Dataset):
     def __getitem__(self, index: int) -> dict[str, Any]:
         sample_index, ordinal = self.entries[index]
         sample = self.base[sample_index]
-        rois = extract_rois(sample["before"], sample["after"], sample["mask"], self.settings)
-        roi = rois[ordinal]
-        x0, y0, x1, y1 = roi.crop_bbox
+        if self.boxes is not None:
+            x0, y0, x1, y1 = self.boxes[index]
+        else:
+            rois = extract_rois(sample["before"], sample["after"], sample["mask"], self.settings)
+            x0, y0, x1, y1 = rois[ordinal].crop_bbox
         if x1 - x0 < self.window or y1 - y0 < self.window:
             raise ValueError(f"ROI crop smaller than the window: {sample['sample_id']}")
         left = x0 + self._offset(x1 - x0)

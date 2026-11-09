@@ -37,9 +37,10 @@ from satchange.models.factory import (
 from satchange.semantic.scd_training import NUM_CLASSES, SemanticSCDLoss
 from satchange.semantic.second import decode_label
 from satchange.semantic.what_stage import (
+    PreloadedSemanticDataset,
     ROICropDataset,
     evaluate_what_pipeline,
-    ground_truth_roi_index,
+    ground_truth_roi_boxes,
 )
 from satchange.training import _best_weights, fit_binary_change_model
 
@@ -73,6 +74,21 @@ def class_frequencies(dataset: object) -> list[float]:
     return [float(x) for x in frequency]
 
 
+def cached_roi_boxes(
+    dataset: SECONDSemanticDataset, split: str
+) -> list[tuple[int, int, tuple[int, int, int, int]]]:
+    """Ground-truth ROI index with crop boxes; cached because labels and ROI settings are frozen."""
+    cache = OUTPUT / f"gt_roi_boxes_{split}.json"
+    if cache.is_file():
+        stored = json.loads(cache.read_text())
+        if stored["sample_ids"] == list(dataset.sample_ids):
+            return [(int(a), int(b), tuple(box)) for a, b, box in stored["entries"]]  # type: ignore[misc]
+    entries = ground_truth_roi_boxes(dataset)
+    OUTPUT.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps({"sample_ids": list(dataset.sample_ids), "entries": entries}))
+    return entries
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--gpu", type=int, required=True)
@@ -104,12 +120,17 @@ def main() -> None:
     assert isinstance(train_data, SECONDSemanticDataset)
     assert isinstance(validation_data, SECONDSemanticDataset)
     if args.stage == "what":
+        train_roi = cached_roi_boxes(train_data, "train")
+        validation_roi = cached_roi_boxes(validation_data, "val")
+        train_tiles = PreloadedSemanticDataset(train_data, num_workers=args.num_workers)
+        validation_tiles = PreloadedSemanticDataset(validation_data, num_workers=args.num_workers)
         train_crops = ROICropDataset(
-            train_data, ground_truth_roi_index(train_data), random_window=True,
-            transform=transform,
+            train_tiles, [(i, o) for i, o, _ in train_roi], random_window=True,  # type: ignore[arg-type]
+            transform=transform, boxes=[box for _, _, box in train_roi],
         )
         validation_crops = ROICropDataset(
-            validation_data, ground_truth_roi_index(validation_data),
+            validation_tiles, [(i, o) for i, o, _ in validation_roi],  # type: ignore[arg-type]
+            boxes=[box for _, _, box in validation_roi],
         )
         generator = torch.Generator().manual_seed(args.seed)
         train_loader = DataLoader(

@@ -9,8 +9,10 @@ from satchange.models import FCSiamDiff
 from satchange.semantic.roi import extract_rois
 from satchange.semantic.what_stage import (
     WINDOW,
+    PreloadedSemanticDataset,
     ROICropDataset,
     evaluate_what_pipeline,
+    ground_truth_roi_boxes,
     ground_truth_roi_index,
     reconstruct_scene,
 )
@@ -70,6 +72,43 @@ def test_crop_dataset_windows_stay_inside_roi_and_are_fixed_size() -> None:
     torch.manual_seed(0)
     starts = {tuple(random_window[2]["before"][0, 0, :4].tolist()) for _ in range(8)}
     assert len(starts) > 1  # the 128 px window moves inside the larger crop
+
+
+class _QuantizedBase(_FakeBase):
+    """Same scenes with RGB values that are exact multiples of 1/255 (as real SECOND tiles)."""
+
+    def __getitem__(self, index: int) -> dict[str, Any]:
+        sample = super().__getitem__(index)
+        for key in ("before", "after"):
+            sample[key] = (sample[key] * 255).round() / 255
+        return sample
+
+
+def test_preloaded_dataset_and_cached_boxes_reproduce_the_slow_path() -> None:
+    base = _QuantizedBase()
+    preloaded = PreloadedSemanticDataset(base, num_workers=0)  # type: ignore[arg-type]
+    for index in range(len(base)):
+        for key, value in base[index].items():
+            other = preloaded[index][key]
+            assert torch.equal(other, value) if torch.is_tensor(value) else other == value
+            if torch.is_tensor(value):
+                assert other.dtype == value.dtype
+    triples = ground_truth_roi_boxes(base)  # type: ignore[arg-type]
+    entries = [(index, ordinal) for index, ordinal, _ in triples]
+    assert entries == ground_truth_roi_index(base)  # type: ignore[arg-type]
+    slow = ROICropDataset(base, entries)  # type: ignore[arg-type]
+    fast = ROICropDataset(
+        preloaded, entries, boxes=[box for _, _, box in triples]  # type: ignore[arg-type]
+    )
+    for index in range(len(entries)):
+        for key, value in slow[index].items():
+            other = fast[index][key]
+            assert torch.equal(other, value) if torch.is_tensor(value) else other == value
+
+
+def test_preloaded_dataset_rejects_non_uint8_images() -> None:
+    with pytest.raises(ValueError, match="uint8"):
+        PreloadedSemanticDataset(_FakeBase(), num_workers=0)  # type: ignore[arg-type]
 
 
 def test_reconstruction_zero_outside_and_overlap_is_order_stable() -> None:
