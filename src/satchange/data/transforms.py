@@ -11,8 +11,13 @@ class RandomFlipRotate:
         self,
         horizontal_flip_probability: float = 0.5,
         vertical_flip_probability: float = 0.5,
+        extra_keys: tuple[str, ...] = (),
     ) -> None:
-        """initialize transformation probabilities."""
+        """initialize transformation probabilities.
+
+        ``extra_keys`` names additional spatial tensors (e.g. dense semantic label maps) that
+        receive exactly the same flips/rotation; the random draws are unchanged.
+        """
 
         if not 0.0 <= horizontal_flip_probability <= 1.0:
             raise ValueError(
@@ -23,6 +28,8 @@ class RandomFlipRotate:
             raise ValueError(
                 "vertical_flip_probability must be between 0 and 1."
             )
+
+        self.extra_keys = tuple(extra_keys)
 
         self.horizontal_flip_probability = (
             horizontal_flip_probability
@@ -51,12 +58,19 @@ class RandomFlipRotate:
         if not isinstance(mask, torch.Tensor):
             raise ValueError("sample['mask'] must be a tensor.")
 
+        extras = {key: sample[key] for key in self.extra_keys}
+        for key, value in extras.items():
+            if not isinstance(value, torch.Tensor):
+                raise ValueError(f"sample[{key!r}] must be a tensor.")
+
         if torch.rand(1).item() < self.horizontal_flip_probability:
+            extras = {k: torch.flip(v, dims=(-1,)) for k, v in extras.items()}
             before = torch.flip(before, dims=(-1,))
             after = torch.flip(after, dims=(-1,))
             mask = torch.flip(mask, dims=(-1,))
 
         if torch.rand(1).item() < self.vertical_flip_probability:
+            extras = {k: torch.flip(v, dims=(-2,)) for k, v in extras.items()}
             before = torch.flip(before, dims=(-2,))
             after = torch.flip(after, dims=(-2,))
             mask = torch.flip(mask, dims=(-2,))
@@ -87,8 +101,14 @@ class RandomFlipRotate:
             dims=(-2, -1),
         )
 
+        extras = {
+            k: torch.rot90(v, k=quarter_turns, dims=(-2, -1)).contiguous()
+            for k, v in extras.items()
+        }
+
         return {
             **sample,
+            **extras,
             "before": before.contiguous(),
             "after": after.contiguous(),
             "mask": mask.contiguous(),

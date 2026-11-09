@@ -46,7 +46,7 @@ class EarlyStopping:
     last_epoch: int = field(default=0, init=False)
 
     def __post_init__(self) -> None:
-        if self.monitor != "validation_f1":
+        if self.monitor not in ("validation_f1", "selection_score"):
             raise ValueError("Unsupported early-stopping monitor.")
         if self.patience is not None and (
             type(self.patience) is not int or self.patience < 1
@@ -582,10 +582,13 @@ def fit_binary_change_model(
     min_epochs refers to the absolute epoch number. Every F1 maximum still saves
     best.pt, even when its gain is smaller than the stopping min_delta.
     """
-    from satchange.models.factory import BINARY_TASK
-    if task != BINARY_TASK:
+    from satchange.models.factory import BINARY_TASK, SEMANTIC_TASK
+    if task not in (BINARY_TASK, SEMANTIC_TASK):
         raise ValueError(f"Unsupported training task: {task}")
-    score_key = "validation_f1"
+    semantic = task == SEMANTIC_TASK
+    score_key = "selection_score" if semantic else "validation_f1"
+    if semantic and (thresholds or world_size() != 1):
+        raise ValueError("Semantic change detection uses no thresholds and one process per run.")
     early_stopping = EarlyStopping(patience, min_epochs, min_delta, monitor=score_key)
     if resume_from is None:
         early_stopping.validate_budget(number_of_epochs)
@@ -844,33 +847,43 @@ def fit_binary_change_model(
 
         if hasattr(train_loader.sampler, "set_epoch"):
             train_loader.sampler.set_epoch(epoch)
-        train_loss = train_one_epoch(
-            model=model,
-            data_loader=train_loader,
-            loss_function=loss_function,
-            optimizer=optimizer,
-            device=device,
-            precision=precision,
-        )
+        if semantic:
+            from satchange.semantic.scd_training import SemanticSCDLoss, run_epoch
+            if not isinstance(loss_function, SemanticSCDLoss):
+                raise ValueError("Semantic task requires SemanticSCDLoss.")
+            train_loss = run_epoch(bare_model, train_loader, loss_function, device,
+                                   precision=precision, optimizer=optimizer)["loss"]
+            validation_results = run_epoch(bare_model, validation_loader, loss_function, device,
+                                           precision=precision)
+            epoch_score = validation_results["selection_score"]
+        else:
+            train_loss = train_one_epoch(
+                model=model,
+                data_loader=train_loader,
+                loss_function=loss_function,
+                optimizer=optimizer,
+                device=device,
+                precision=precision,
+            )
 
-        train_loss = sum(gather_objects(train_loss)) / world_size()
-        validation_results = on_rank_zero(lambda: evaluate_thresholds(
-            model=bare_model,
-            data_loader=validation_loader,
-            loss_function=loss_function,
-            device=device,
-            thresholds=thresholds,
-            precision=precision,
-        ))
+            train_loss = sum(gather_objects(train_loss)) / world_size()
+            validation_results = on_rank_zero(lambda: evaluate_thresholds(
+                model=bare_model,
+                data_loader=validation_loader,
+                loss_function=loss_function,
+                device=device,
+                thresholds=thresholds,
+                precision=precision,
+            ))
 
-        best_threshold_result = max(
-            validation_results[
-                "threshold_results"
-            ],
-            key=lambda result: result["f1"],
-        )
+            best_threshold_result = max(
+                validation_results[
+                    "threshold_results"
+                ],
+                key=lambda result: result["f1"],
+            )
 
-        epoch_score = best_threshold_result["f1"]
+            epoch_score = best_threshold_result["f1"]
 
         learning_rate = float(
             optimizer.param_groups[0]["lr"]
@@ -912,88 +925,97 @@ def fit_binary_change_model(
             peak_gpu_memory_mb = 0.0
 
 
-        threshold_05_result = next(
-            (
-                result
-                for result
-                in validation_results[
-                    "threshold_results"
+        if semantic:
+            epoch_metrics = {
+                "epoch": epoch, "task": task, "train_loss": train_loss,
+                "validation_loss": validation_results["loss"],
+                **{k: v for k, v in validation_results.items() if k != "loss"},
+                "learning_rate": learning_rate, "next_learning_rate": next_learning_rate,
+                "epoch_seconds": epoch_seconds, "peak_gpu_memory_mb": peak_gpu_memory_mb,
+            }
+        else:
+            threshold_05_result = next(
+                (
+                    result
+                    for result
+                    in validation_results[
+                        "threshold_results"
+                    ]
+                    if result["threshold"] == 0.50
+                ),
+                None,
+            )
+
+            mean_changed_probability = (
+                validation_results[
+                    "mean_changed_probability"
                 ]
-                if result["threshold"] == 0.50
-            ),
-            None,
-        )
+            )
 
-        mean_changed_probability = (
-            validation_results[
-                "mean_changed_probability"
-            ]
-        )
+            mean_unchanged_probability = (
+                validation_results[
+                    "mean_unchanged_probability"
+                ]
+            )
 
-        mean_unchanged_probability = (
-            validation_results[
-                "mean_unchanged_probability"
-            ]
-        )
-
-        probability_gap = (
-            mean_changed_probability
-            - mean_unchanged_probability
-        )
-
-        epoch_metrics = {
-            "epoch": epoch,
-            "train_loss": train_loss,
-            "validation_loss": (
-                validation_results["loss"]
-            ),
-            "best_threshold": (
-                best_threshold_result["threshold"]
-            ),
-            "validation_precision": (
-                best_threshold_result["precision"]
-            ),
-            "validation_recall": (
-                best_threshold_result["recall"]
-            ),
-            "validation_f1": (
-                best_threshold_result["f1"]
-            ),
-            "validation_iou": (
-                best_threshold_result["iou"]
-            ),
-            "validation_accuracy": (
-                best_threshold_result["accuracy"]
-            ),
-            "true_positive": (
-                best_threshold_result["tp"]
-            ),
-            "false_positive": (
-                best_threshold_result["fp"]
-            ),
-            "false_negative": (
-                best_threshold_result["fn"]
-            ),
-            "true_negative": (
-                best_threshold_result["tn"]
-            ),
-            "f1_at_05": (
-                threshold_05_result["f1"]
-                if threshold_05_result is not None
-                else None
-            ),
-            "mean_changed_probability": (
+            probability_gap = (
                 mean_changed_probability
-            ),
-            "mean_unchanged_probability": (
-                mean_unchanged_probability
-            ),
-            "probability_gap": probability_gap,
-            "learning_rate": learning_rate,
-            "next_learning_rate": next_learning_rate,
-            "epoch_seconds": epoch_seconds,
-            "peak_gpu_memory_mb": peak_gpu_memory_mb,
-        }
+                - mean_unchanged_probability
+            )
+
+            epoch_metrics = {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "validation_loss": (
+                    validation_results["loss"]
+                ),
+                "best_threshold": (
+                    best_threshold_result["threshold"]
+                ),
+                "validation_precision": (
+                    best_threshold_result["precision"]
+                ),
+                "validation_recall": (
+                    best_threshold_result["recall"]
+                ),
+                "validation_f1": (
+                    best_threshold_result["f1"]
+                ),
+                "validation_iou": (
+                    best_threshold_result["iou"]
+                ),
+                "validation_accuracy": (
+                    best_threshold_result["accuracy"]
+                ),
+                "true_positive": (
+                    best_threshold_result["tp"]
+                ),
+                "false_positive": (
+                    best_threshold_result["fp"]
+                ),
+                "false_negative": (
+                    best_threshold_result["fn"]
+                ),
+                "true_negative": (
+                    best_threshold_result["tn"]
+                ),
+                "f1_at_05": (
+                    threshold_05_result["f1"]
+                    if threshold_05_result is not None
+                    else None
+                ),
+                "mean_changed_probability": (
+                    mean_changed_probability
+                ),
+                "mean_unchanged_probability": (
+                    mean_unchanged_probability
+                ),
+                "probability_gap": probability_gap,
+                "learning_rate": learning_rate,
+                "next_learning_rate": next_learning_rate,
+                "epoch_seconds": epoch_seconds,
+                "peak_gpu_memory_mb": peak_gpu_memory_mb,
+            }
 
         metric_history.append(
             epoch_metrics
@@ -1066,7 +1088,8 @@ def fit_binary_change_model(
                 else None
             ),
         }
-
+        if semantic:
+            checkpoint_state["task"] = task
 
         def save_epoch(
             checkpoint_state: dict[str, Any] = checkpoint_state,
@@ -1130,30 +1153,34 @@ def fit_binary_change_model(
             f"{validation_results['loss']:.6f}"
         )
 
-        print(
-            f"Best threshold:   "
-            f"{best_threshold_result['threshold']:.2f}"
-        )
+        if semantic:
+            print(f"Validation SeK:   {validation_results['sek']:.6f}; "
+                  f"mIoU: {validation_results['miou']:.6f}; Fscd: {validation_results['fscd']:.6f}")
+        else:
+            print(
+                f"Best threshold:   "
+                f"{best_threshold_result['threshold']:.2f}"
+            )
 
-        print(
-            f"Precision:        "
-            f"{best_threshold_result['precision']:.6f}"
-        )
+            print(
+                f"Precision:        "
+                f"{best_threshold_result['precision']:.6f}"
+            )
 
-        print(
-            f"Recall:           "
-            f"{best_threshold_result['recall']:.6f}"
-        )
+            print(
+                f"Recall:           "
+                f"{best_threshold_result['recall']:.6f}"
+            )
 
-        print(
-            f"F1:               "
-            f"{best_threshold_result['f1']:.6f}"
-        )
+            print(
+                f"F1:               "
+                f"{best_threshold_result['f1']:.6f}"
+            )
 
-        print(
-            f"IoU:              "
-            f"{best_threshold_result['iou']:.6f}"
-        )
+            print(
+                f"IoU:              "
+                f"{best_threshold_result['iou']:.6f}"
+            )
 
         if should_stop:
             if stop_reason == "early_stopping":
