@@ -5,9 +5,10 @@ The CUDA path calls ``selective_scan_cuda_oflex`` built from ChangeMamba ``kerne
 The thin autograd wrapper follows ``SelectiveScanOflex`` in ChangeMamba
 ``changedetection/models/vmamba.py`` (Copyright the ChangeMamba/VMamba authors, Apache-2.0).
 The reference recurrence is an independent PyTorch implementation used for CPU tests and as the
-numerical oracle for the kernel. Importing this module has no side effects: the kernel is loaded
-lazily on first CUDA use, and a missing kernel on CUDA raises instead of falling back to the
-(very slow) reference.
+numerical oracle for the kernel. Every call records its analytic FLOPs (``flop_registry``)
+for compute accounting, because ``FlopCounterMode`` does not see the kernel. Importing this
+module has no side effects: the kernel is loaded lazily on first CUDA use, and a missing kernel
+on CUDA raises instead of falling back to the (very slow) reference.
 
 Shapes: ``u``/``delta`` ``[batch, channels, length]``; ``A`` ``[channels, state]``; ``B``/``C``
 ``[batch, groups, state, length]`` with ``channels % groups == 0``; ``D``/``delta_bias``
@@ -24,6 +25,8 @@ from typing import Any, Literal, cast
 
 import torch
 import torch.nn.functional as F
+
+from satchange.flop_registry import record_analytic_flops
 
 KERNEL_MODULE = "selective_scan_cuda_oflex"
 Backend = Literal["auto", "kernel", "reference"]
@@ -190,12 +193,22 @@ def selective_scan(
     """Selective scan; ``auto``: kernel on CUDA (required there), reference on CPU."""
     if backend not in ("auto", "kernel", "reference"):
         raise ValueError(f"backend must be 'auto', 'kernel' or 'reference', got {backend!r}")
+    _check_shapes(u, delta, A, B, C, D, delta_bias)
+    record_analytic_flops(
+        "selective_scan",
+        needs_backward=torch.is_grad_enabled()
+        and any(t is not None and t.requires_grad for t in (u, delta, A, B, C, D, delta_bias)),
+        batch=u.shape[0],
+        length=u.shape[2],
+        channels=u.shape[1],
+        state=A.shape[1],
+        with_d=D is not None,
+    )
     use_kernel = backend == "kernel" or (backend == "auto" and u.is_cuda)
     if not use_kernel:
         return selective_scan_reference(
             u, delta, A, B, C, D, delta_bias, delta_softplus=delta_softplus
         )
-    _check_shapes(u, delta, A, B, C, D, delta_bias)
     if not u.is_cuda:
         raise ValueError("the selective-scan kernel needs CUDA tensors")
     output = _SelectiveScanKernel.apply(
