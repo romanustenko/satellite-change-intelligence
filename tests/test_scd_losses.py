@@ -208,7 +208,7 @@ def test_pseudo_labeler_rules_and_percentile():
     classes = torch.randint(1, 7, (1, size, size))
     logits = F.one_hot(classes, 7).permute(0, 3, 1, 2).float() * 8.0
     teacher = _FixedTeacher(logits, logits.clone())
-    labeler = L.SCanNetPseudoLabeler(tta=False)
+    labeler = L.SCanNetPseudoLabeler(start_step=1, tta=False)
     images = torch.zeros(1, 3, size, size)
     with pytest.raises(RuntimeError, match="refresh_teacher"):
         labeler(images, images, torch.zeros(1, size, size, dtype=torch.int64))
@@ -247,7 +247,7 @@ def test_pseudo_labeler_tta_uses_flips_and_percentile_matches_numpy():
 
     size = 4
     logits = torch.randn(1, 7, size, size)
-    labeler = L.SCanNetPseudoLabeler(tta=True)
+    labeler = L.SCanNetPseudoLabeler(start_step=1, tta=True)
     labeler.refresh_teacher(Recorder(logits, logits.clone()))
     image = (
         torch.arange(size * size, dtype=torch.float32)

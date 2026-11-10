@@ -4,7 +4,7 @@ Logit layout: ``[B, 2 * K, H, W]`` with K = 7 classes (0 = no change). Channels 
 T1 map, ``K..2K-1`` the T2 map. Selection score = SeK on the validation split (D-014).
 """
 
-from typing import Any
+from typing import Any, cast
 
 import torch
 from torch import nn
@@ -12,7 +12,14 @@ from torch.nn import functional as F
 from torch.utils.data import DataLoader
 
 from satchange.execution import precision_context
+from satchange.semantic.scd_losses import (
+    MambaSCDLoss,
+    SCanNetLoss,
+    SCanNetPseudoLabeler,
+    SiamUNetLoss,
+)
 from satchange.semantic.scd_metrics import SemanticChangeMetrics
+from satchange.semantic.scd_outputs import SemanticArgmax, maps_from_change_and_semantic
 from satchange.step_budget import StepBudget
 
 TASK = "semantic_change_detection"
@@ -77,23 +84,48 @@ def predict_maps(logits: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
     return first.argmax(dim=1), second.argmax(dim=1)
 
 
+MULTI_HEAD_LOSSES = (MambaSCDLoss, SCanNetLoss, SiamUNetLoss)
+
+
+def is_multi_head_loss(loss_function: nn.Module) -> bool:
+    """True for the per-model losses of the multi-head SCD models (``semantic.scd_losses``)."""
+    return isinstance(loss_function, MULTI_HEAD_LOSSES)
+
+
 def run_epoch(
     model: nn.Module,
     loader: DataLoader,
-    loss_function: SemanticSCDLoss,
+    loss_function: nn.Module,
     device: torch.device,
     *,
     precision: str = "fp32",
     optimizer: torch.optim.Optimizer | None = None,
     budget: StepBudget | None = None,
+    semantic_argmax: str | None = None,
+    pseudo_labeler: SCanNetPseudoLabeler | None = None,
 ) -> dict[str, Any]:
     """Fit (``optimizer`` given) or evaluate one split; metrics come from pooled counts.
 
     With a ``budget`` the fit stops as soon as its optimizer-step limit is reached.
+
+    Two model contracts: the joint 14-channel layout with ``SemanticSCDLoss`` (argmax decoding), or
+    a multi-head model returning ``(change, semantic_t1, semantic_t2)`` with its per-model loss
+    (``semantic.scd_losses``); then ``semantic_argmax`` (``"land_cover"`` per D-049) is required
+    and decides how changed pixels are decoded. ``pseudo_labeler`` (SCanNet ``L_psd``, training
+    only, active once its teacher exists) supplies pseudo labels to ``SCanNetLoss``.
     """
     training = optimizer is not None
     if budget is not None and not training:
         raise ValueError("A step budget applies only when fitting (optimizer given).")
+    multi_head = is_multi_head_loss(loss_function)
+    if multi_head and semantic_argmax is None:
+        raise ValueError("Multi-head SCD models need an explicit semantic_argmax (D-049).")
+    if not multi_head and (semantic_argmax is not None or pseudo_labeler is not None):
+        raise ValueError("semantic_argmax and pseudo_labeler apply only to multi-head models.")
+    if pseudo_labeler is not None and not isinstance(loss_function, SCanNetLoss):
+        raise ValueError("Pseudo labels are part of the SCanNet loss only.")
+    if pseudo_labeler is not None and training and budget is None:
+        raise ValueError("Pseudo labels start at an optimizer step; a step budget is required.")
     model.train(training)
     metrics = SemanticChangeMetrics(NUM_CLASSES)
     total_loss, total_samples = 0.0, 0
@@ -106,11 +138,24 @@ def run_epoch(
         label_2 = batch["after_label"].to(device, non_blocking=True)
         if optimizer is not None:
             optimizer.zero_grad(set_to_none=True)
+        pseudo: dict[str, torch.Tensor] = {}
+        if training and pseudo_labeler is not None:
+            assert budget is not None
+            pseudo_labeler.before_step(model, budget.optimizer_steps)
+        if training and pseudo_labeler is not None and pseudo_labeler.active:
+            with precision_context(device, precision):
+                pseudo_map = pseudo_labeler(before, after, label_1)
+            pseudo = {"pseudo_before": pseudo_map, "pseudo_after": pseudo_map}
         with torch.set_grad_enabled(training), precision_context(device, precision):
-            logits = model(before, after)
-        logits = logits.float()
-        with torch.set_grad_enabled(training):
-            loss = loss_function(logits, label_1, label_2)
+            raw_outputs = model(before, after)
+        if multi_head:
+            outputs = tuple(head.float() for head in raw_outputs)
+            with torch.set_grad_enabled(training):
+                loss = loss_function(outputs, label_1, label_2, **pseudo)
+        else:
+            logits = raw_outputs.float()
+            with torch.set_grad_enabled(training):
+                loss = loss_function(logits, label_1, label_2)
         if not torch.isfinite(loss):
             raise RuntimeError(f"Semantic loss is not finite: {loss.item()}.")
         if optimizer is not None:
@@ -119,7 +164,13 @@ def run_epoch(
             if budget is not None:
                 budget.take(before.shape[0])
         with torch.no_grad():
-            pred_1, pred_2 = predict_maps(logits)
+            if multi_head:
+                pred_1, pred_2 = maps_from_change_and_semantic(
+                    outputs[0], outputs[1], outputs[2],
+                    semantic_argmax=cast(SemanticArgmax, semantic_argmax),
+                )
+            else:
+                pred_1, pred_2 = predict_maps(logits)
             metrics.update(pred_1, label_1)
             metrics.update(pred_2, label_2)
         total_loss += loss.item() * before.shape[0]

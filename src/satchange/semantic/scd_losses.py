@@ -27,6 +27,7 @@ The Lovasz-softmax extension follows Berman, Triki, Blaschko (CVPR 2018, MIT lic
 same conventions as ChangeMamba's call (batch-level, classes present in the valid labels).
 """
 
+import math
 from collections.abc import Callable
 from typing import cast
 
@@ -273,6 +274,18 @@ class SCanNetLoss(nn.Module):
         )["loss"]
 
 
+PSEUDO_LABEL_START_FRACTION = 0.5  # D-055 (USER): L_psd starts at half of the step budget
+
+
+def pseudo_label_start_step(max_optimizer_steps: int) -> int:
+    """Optimizer step at which SCanNet's ``L_psd`` starts (``ceil`` of half the step budget)."""
+    if type(max_optimizer_steps) is not int or max_optimizer_steps < 1:
+        raise ValueError(
+            f"max_optimizer_steps must be a positive integer, got {max_optimizer_steps!r}."
+        )
+    return max(1, math.ceil(PSEUDO_LABEL_START_FRACTION * max_optimizer_steps))
+
+
 def _percentile(values: torch.Tensor, percent: float) -> float:
     """Linear-interpolation percentile (NumPy default) of a 1-D tensor."""
     ordered = torch.sort(values.double()).values
@@ -305,19 +318,47 @@ class SCanNetPseudoLabeler:
     flips (TTA); a pixel gets the teacher class when it is unchanged in the ground truth, both
     dates are confident (class-wise running percentile threshold, clipped to [0.5, 0.9]) and the
     two dates agree. The shared threshold state is updated by date 1 then date 2, as in the code.
-    ``refresh_teacher`` snapshots the model and resets the thresholds; when to call it is decided
-    by the training engine (SCanNet refreshes on every validation-Fscd improvement once
-    Fscd > ``psd_init_Fscd``; how that maps to a fixed step budget is a protocol question).
+
+    Schedule (D-055, USER): the original switches ``L_psd`` on once validation Fscd > 0.6 and
+    re-snapshots the teacher at every Fscd improvement; that does not fit a fixed step budget, so
+    here ``L_psd`` starts at the fixed optimizer step ``start_step`` (``before_step`` snapshots the
+    model then) and the teacher is re-snapshotted after every validation whose Fscd beats the best
+    so far (``after_validation``). ``refresh_teacher`` resets the thresholds.
     """
 
     def __init__(
-        self, *, percentile: float = 0.6, tta: bool = True, classes: int = NUM_CLASSES
+        self,
+        *,
+        start_step: int,
+        percentile: float = 0.6,
+        tta: bool = True,
+        classes: int = NUM_CLASSES,
     ) -> None:
+        if type(start_step) is not int or start_step < 1:
+            raise ValueError(f"start_step must be a positive integer, got {start_step!r}.")
         if not 0.0 < percentile < 1.0:
             raise ValueError(f"percentile must be in (0, 1), got {percentile}.")
-        self.percentile, self.tta, self.classes = percentile, tta, classes
+        self.start_step, self.percentile, self.tta, self.classes = (
+            start_step,
+            percentile,
+            tta,
+            classes,
+        )
         self.teacher: nn.Module | None = None
         self.thresholds = _RunningThresholds(classes, percentile)
+        self.best_fscd = float("-inf")
+
+    def before_step(self, model: nn.Module, optimizer_steps: int) -> None:
+        """Snapshot the teacher at the start step (no-op afterwards)."""
+        if self.teacher is None and optimizer_steps >= self.start_step:
+            self.refresh_teacher(model)
+
+    def after_validation(self, model: nn.Module, fscd: float, optimizer_steps: int) -> None:
+        """Track the best validation Fscd; refresh the active teacher when it improved."""
+        improved = fscd > self.best_fscd
+        self.best_fscd = max(self.best_fscd, fscd)
+        if improved and optimizer_steps >= self.start_step:
+            self.refresh_teacher(model)
 
     @property
     def active(self) -> bool:
@@ -428,6 +469,7 @@ def create_scd_loss(model_name: str) -> nn.Module:
 
 
 __all__ = [
+    "PSEUDO_LABEL_START_FRACTION",
     "SCD_LOSS_REGISTRY",
     "MambaSCDLoss",
     "SCanNetLoss",
@@ -437,6 +479,7 @@ __all__ = [
     "create_scd_loss",
     "lovasz_softmax",
     "masked_cross_entropy",
+    "pseudo_label_start_step",
     "similarity_mse",
     "weighted_bce_logits",
 ]

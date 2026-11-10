@@ -583,6 +583,8 @@ def fit_binary_change_model(
     stop_file: str | Path | None = None,
     max_optimizer_steps: int | None = None,
     flops_per_sample: float | None = None,
+    semantic_argmax: str | None = None,
+    pseudo_labeler: Any | None = None,
 ) -> list[dict[str, Any]]:
     """Train or resume, optionally stopping after patience epochs without F1 gain.
 
@@ -596,11 +598,22 @@ def fit_binary_change_model(
     checkpointed like any other. It excludes early stopping, and ``number_of_epochs`` must be
     large enough to reach it. ``flops_per_sample`` (from ``semantic.compute``) adds
     ``training_flops = flops_per_sample * samples_seen`` to the records.
+
+    Semantic task: ``loss_function`` is ``SemanticSCDLoss`` (joint 14-channel models) or the
+    per-model loss of a multi-head SCD model; the latter requires ``semantic_argmax`` (D-049:
+    ``"land_cover"``) and may take a SCanNet ``pseudo_labeler`` (``L_psd``; the teacher schedule
+    follows the labeler's fixed-step schedule, D-055; it needs the step budget and cannot resume).
     """
     from satchange.models.factory import BINARY_TASK, SEMANTIC_TASK
     if task not in (BINARY_TASK, SEMANTIC_TASK):
         raise ValueError(f"Unsupported training task: {task}")
     semantic = task == SEMANTIC_TASK
+    if not semantic and (semantic_argmax is not None or pseudo_labeler is not None):
+        raise ValueError("semantic_argmax and pseudo_labeler apply only to the semantic task.")
+    if pseudo_labeler is not None and resume_from is not None:
+        raise ValueError("Resuming with pseudo labels is unsupported: the teacher is not saved.")
+    if pseudo_labeler is not None and max_optimizer_steps is None:
+        raise ValueError("Pseudo labels start at an optimizer step; set max_optimizer_steps.")
     score_key = "selection_score" if semantic else "validation_f1"
     if semantic and (thresholds or world_size() != 1):
         raise ValueError("Semantic change detection uses no thresholds and one process per run.")
@@ -897,15 +910,27 @@ def fit_binary_change_model(
         if hasattr(train_loader.sampler, "set_epoch"):
             train_loader.sampler.set_epoch(epoch)
         if semantic:
-            from satchange.semantic.scd_training import SemanticSCDLoss, run_epoch
-            if not isinstance(loss_function, SemanticSCDLoss):
-                raise ValueError("Semantic task requires SemanticSCDLoss.")
+            from satchange.semantic.scd_training import (
+                SemanticSCDLoss,
+                is_multi_head_loss,
+                run_epoch,
+            )
+            if not (
+                isinstance(loss_function, SemanticSCDLoss) or is_multi_head_loss(loss_function)
+            ):
+                raise ValueError("Semantic task requires SemanticSCDLoss or a per-model SCD loss.")
             train_loss = run_epoch(bare_model, train_loader, loss_function, device,
-                                   precision=precision, optimizer=optimizer,
-                                   budget=budget)["loss"]
+                                   precision=precision, optimizer=optimizer, budget=budget,
+                                   semantic_argmax=semantic_argmax,
+                                   pseudo_labeler=pseudo_labeler)["loss"]
             validation_results = run_epoch(bare_model, validation_loader, loss_function, device,
-                                           precision=precision)
+                                           precision=precision, semantic_argmax=semantic_argmax)
             epoch_score = validation_results["selection_score"]
+            if pseudo_labeler is not None:
+                assert budget is not None
+                pseudo_labeler.after_validation(
+                    bare_model, validation_results["fscd"], budget.optimizer_steps
+                )
         else:
             train_loss = train_one_epoch(
                 model=model,
