@@ -286,6 +286,28 @@ def pseudo_label_start_step(max_optimizer_steps: int) -> int:
     return max(1, math.ceil(PSEUDO_LABEL_START_FRACTION * max_optimizer_steps))
 
 
+def pseudo_label_budget_steps(
+    flop_budget: float, *, step_flops: float, teacher_step_flops: float
+) -> int:
+    """Smallest step count whose FLOPs (incl. teacher passes after the start step) reach the budget.
+
+    D-056 (USER): the teacher's inference FLOPs are charged. With ``N`` steps, ``L_psd`` starts at
+    ``pseudo_label_start_step(N)``, so the cost is ``N * step + (N - start) * teacher_step``.
+    """
+    if not (flop_budget > 0 and step_flops > 0 and teacher_step_flops >= 0):
+        raise ValueError("flop_budget and step_flops must be positive, teacher_step_flops >= 0.")
+
+    def cost(steps: int) -> float:
+        return steps * step_flops + (steps - pseudo_label_start_step(steps)) * teacher_step_flops
+
+    steps = max(1, math.floor(flop_budget / (step_flops + 0.5 * teacher_step_flops)))
+    while steps > 1 and cost(steps - 1) >= flop_budget:
+        steps -= 1
+    while cost(steps) < flop_budget:
+        steps += 1
+    return steps
+
+
 def _percentile(values: torch.Tensor, percent: float) -> float:
     """Linear-interpolation percentile (NumPy default) of a 1-D tensor."""
     ordered = torch.sort(values.double()).values
@@ -333,6 +355,7 @@ class SCanNetPseudoLabeler:
         percentile: float = 0.6,
         tta: bool = True,
         classes: int = NUM_CLASSES,
+        flops_per_sample: float | None = None,
     ) -> None:
         if type(start_step) is not int or start_step < 1:
             raise ValueError(f"start_step must be a positive integer, got {start_step!r}.")
@@ -347,6 +370,38 @@ class SCanNetPseudoLabeler:
         self.teacher: nn.Module | None = None
         self.thresholds = _RunningThresholds(classes, percentile)
         self.best_fscd = float("-inf")
+        # Teacher inference is training compute (D-056): FLOPs per sample of one pseudo-label call.
+        if flops_per_sample is not None and not flops_per_sample > 0:
+            raise ValueError("flops_per_sample must be positive.")
+        self.flops_per_sample = flops_per_sample
+        self.teacher_samples = 0
+
+    @property
+    def teacher_flops(self) -> float:
+        """FLOPs spent so far on teacher passes (needs ``flops_per_sample``)."""
+        if self.flops_per_sample is None:
+            raise RuntimeError("flops_per_sample was not set; measure it with count_flops.")
+        return self.flops_per_sample * self.teacher_samples
+
+    def count_flops(self, model: nn.Module, before: torch.Tensor, after: torch.Tensor) -> float:
+        """FLOPs per sample of one pseudo-label call (all TTA passes), set as ``flops_per_sample``.
+
+        Measured with ``FlopCounterMode`` on a throw-away teacher copy of ``model``; the labeler's
+        own teacher, thresholds and counters are left untouched.
+        """
+        from torch.utils.flop_counter import FlopCounterMode
+
+        probe = SCanNetPseudoLabeler(
+            start_step=self.start_step,
+            percentile=self.percentile,
+            tta=self.tta,
+            classes=self.classes,
+        )
+        probe.refresh_teacher(model)
+        with FlopCounterMode(display=False) as counter:
+            probe(before, after, torch.zeros_like(before[:, 0], dtype=torch.int64))
+        self.flops_per_sample = counter.get_total_flops() / before.shape[0]
+        return self.flops_per_sample
 
     def before_step(self, model: nn.Module, optimizer_steps: int) -> None:
         """Snapshot the teacher at the start step (no-op afterwards)."""
@@ -416,6 +471,7 @@ class SCanNetPseudoLabeler:
         if self.teacher is None:
             raise RuntimeError("Call refresh_teacher(model) before generating pseudo labels.")
         probability_1, probability_2 = self._probabilities(before, after)
+        self.teacher_samples += before.shape[0]
         confident_1, index_1 = self._confident(probability_1)
         confident_2, index_2 = self._confident(probability_2)
         selected = confident_1 & confident_2 & (index_1 == index_2) & (before_label == 0)
@@ -479,6 +535,7 @@ __all__ = [
     "create_scd_loss",
     "lovasz_softmax",
     "masked_cross_entropy",
+    "pseudo_label_budget_steps",
     "pseudo_label_start_step",
     "similarity_mse",
     "weighted_bce_logits",

@@ -5,6 +5,7 @@ import os
 import pickle
 import time
 import warnings
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -585,6 +586,7 @@ def fit_binary_change_model(
     flops_per_sample: float | None = None,
     semantic_argmax: str | None = None,
     pseudo_labeler: Any | None = None,
+    lr_factor: Callable[[int], float] | None = None,
 ) -> list[dict[str, Any]]:
     """Train or resume, optionally stopping after patience epochs without F1 gain.
 
@@ -602,7 +604,10 @@ def fit_binary_change_model(
     Semantic task: ``loss_function`` is ``SemanticSCDLoss`` (joint 14-channel models) or the
     per-model loss of a multi-head SCD model; the latter requires ``semantic_argmax`` (D-049:
     ``"land_cover"``) and may take a SCanNet ``pseudo_labeler`` (``L_psd``; the teacher schedule
-    follows the labeler's fixed-step schedule, D-055; it needs the step budget and cannot resume).
+    follows the labeler's fixed-step schedule, D-055; it needs the step budget and cannot resume;
+    its teacher FLOPs are added to ``training_flops`` when ``flops_per_sample`` is set on it,
+    D-056).
+    ``lr_factor`` is the per-step learning-rate multiplier of the semantic task (D-057).
     """
     from satchange.models.factory import BINARY_TASK, SEMANTIC_TASK
     if task not in (BINARY_TASK, SEMANTIC_TASK):
@@ -610,6 +615,8 @@ def fit_binary_change_model(
     semantic = task == SEMANTIC_TASK
     if not semantic and (semantic_argmax is not None or pseudo_labeler is not None):
         raise ValueError("semantic_argmax and pseudo_labeler apply only to the semantic task.")
+    if lr_factor is not None and not semantic:
+        raise ValueError("lr_factor applies only to the semantic task.")
     if pseudo_labeler is not None and resume_from is not None:
         raise ValueError("Resuming with pseudo labels is unsupported: the teacher is not saved.")
     if pseudo_labeler is not None and max_optimizer_steps is None:
@@ -922,7 +929,7 @@ def fit_binary_change_model(
             train_loss = run_epoch(bare_model, train_loader, loss_function, device,
                                    precision=precision, optimizer=optimizer, budget=budget,
                                    semantic_argmax=semantic_argmax,
-                                   pseudo_labeler=pseudo_labeler)["loss"]
+                                   pseudo_labeler=pseudo_labeler, lr_factor=lr_factor)["loss"]
             validation_results = run_epoch(bare_model, validation_loader, loss_function, device,
                                            precision=precision, semantic_argmax=semantic_argmax)
             epoch_score = validation_results["selection_score"]
@@ -1098,6 +1105,9 @@ def fit_binary_change_model(
             if flops_per_sample is not None:
                 epoch_metrics["flops_per_sample"] = flops_per_sample
                 epoch_metrics["training_flops"] = flops_per_sample * budget.samples_seen
+                if pseudo_labeler is not None:
+                    epoch_metrics["teacher_flops"] = pseudo_labeler.teacher_flops
+                    epoch_metrics["training_flops"] += pseudo_labeler.teacher_flops
 
         metric_history.append(
             epoch_metrics

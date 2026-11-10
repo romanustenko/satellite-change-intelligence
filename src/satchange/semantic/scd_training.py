@@ -4,6 +4,7 @@ Logit layout: ``[B, 2 * K, H, W]`` with K = 7 classes (0 = no change). Channels 
 T1 map, ``K..2K-1`` the T2 map. Selection score = SeK on the validation split (D-014).
 """
 
+from collections.abc import Callable
 from typing import Any, cast
 
 import torch
@@ -103,6 +104,7 @@ def run_epoch(
     budget: StepBudget | None = None,
     semantic_argmax: str | None = None,
     pseudo_labeler: SCanNetPseudoLabeler | None = None,
+    lr_factor: Callable[[int], float] | None = None,
 ) -> dict[str, Any]:
     """Fit (``optimizer`` given) or evaluate one split; metrics come from pooled counts.
 
@@ -113,6 +115,9 @@ def run_epoch(
     (``semantic.scd_losses``); then ``semantic_argmax`` (``"land_cover"`` per D-049) is required
     and decides how changed pixels are decoded. ``pseudo_labeler`` (SCanNet ``L_psd``, training
     only, active once its teacher exists) supplies pseudo labels to ``SCanNetLoss``.
+    ``lr_factor`` (training only, needs the budget) maps the 0-based optimizer-step index to a
+    multiplier of each parameter group's base learning rate (``lr_schedule``, D-057); being a pure
+    function of the step counter it needs no scheduler state on resume.
     """
     training = optimizer is not None
     if budget is not None and not training:
@@ -124,6 +129,8 @@ def run_epoch(
         raise ValueError("semantic_argmax and pseudo_labeler apply only to multi-head models.")
     if pseudo_labeler is not None and not isinstance(loss_function, SCanNetLoss):
         raise ValueError("Pseudo labels are part of the SCanNet loss only.")
+    if lr_factor is not None and (not training or budget is None):
+        raise ValueError("lr_factor needs a training epoch with a step budget.")
     if pseudo_labeler is not None and training and budget is None:
         raise ValueError("Pseudo labels start at an optimizer step; a step budget is required.")
     model.train(training)
@@ -137,6 +144,11 @@ def run_epoch(
         label_1 = batch["before_label"].to(device, non_blocking=True)
         label_2 = batch["after_label"].to(device, non_blocking=True)
         if optimizer is not None:
+            if lr_factor is not None:
+                assert budget is not None
+                factor = lr_factor(budget.optimizer_steps)
+                for group in optimizer.param_groups:
+                    group["lr"] = group.setdefault("base_lr", group["lr"]) * factor
             optimizer.zero_grad(set_to_none=True)
         pseudo: dict[str, torch.Tensor] = {}
         if training and pseudo_labeler is not None:
