@@ -8,7 +8,7 @@ for the semantic task.
 Thin driver over the shared engine (``fit_binary_change_model(task="semantic_change_detection")``);
 no new trainer. FC-Siam-Diff with 14 output channels, optional LEVIR-CD initialization (head
 excluded). Validation only; the SECOND test split is never read. Direct runs are recorded in
-``<output>/direct_runs.jsonl`` and must be added to ``docs/research2/GPU_LEDGER.md``. Example:
+``<output>/direct_runs.jsonl`` and must be added to ``docs/research2/archive/v1/GPU_LEDGER.md (v1 runs)``. Example:
 
     python src/scripts/run_r2_scd.py --gpu 1 --seed 42 --lr 0.001 --epochs 40 --init levir
 """

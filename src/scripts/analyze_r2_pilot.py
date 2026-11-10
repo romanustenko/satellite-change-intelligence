@@ -1,4 +1,4 @@
-"""Analyse Research 2 pilot v1 (docs/research2/PILOT_SPEC.md): scratch vs LEVIR-CD initialization.
+"""Analyse Research 2 pilot v1 (docs/research2/archive/v1/PILOT_SPEC.md): scratch vs LEVIR-CD initialization.
 
 Reads ``last.pt`` histories of ``artifacts/research2/pilot/r2_pilot_<cond>_s<seed>_<version>`` (own
 trusted checkpoints, CPU), uses validation F1 only, and writes a JSON + Markdown summary. Usage:
