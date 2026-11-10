@@ -13,6 +13,7 @@ from torch.utils.data import DataLoader
 
 from satchange.execution import precision_context
 from satchange.semantic.scd_metrics import SemanticChangeMetrics
+from satchange.step_budget import StepBudget
 
 TASK = "semantic_change_detection"
 NUM_CLASSES = 7
@@ -84,13 +85,21 @@ def run_epoch(
     *,
     precision: str = "fp32",
     optimizer: torch.optim.Optimizer | None = None,
+    budget: StepBudget | None = None,
 ) -> dict[str, Any]:
-    """Fit (``optimizer`` given) or evaluate one split; metrics come from pooled counts."""
+    """Fit (``optimizer`` given) or evaluate one split; metrics come from pooled counts.
+
+    With a ``budget`` the fit stops as soon as its optimizer-step limit is reached.
+    """
     training = optimizer is not None
+    if budget is not None and not training:
+        raise ValueError("A step budget applies only when fitting (optimizer given).")
     model.train(training)
     metrics = SemanticChangeMetrics(NUM_CLASSES)
     total_loss, total_samples = 0.0, 0
     for batch in loader:
+        if budget is not None and budget.exhausted:
+            break
         before = batch["before"].to(device, non_blocking=True)
         after = batch["after"].to(device, non_blocking=True)
         label_1 = batch["before_label"].to(device, non_blocking=True)
@@ -107,6 +116,8 @@ def run_epoch(
         if optimizer is not None:
             loss.backward()
             optimizer.step()
+            if budget is not None:
+                budget.take(before.shape[0])
         with torch.no_grad():
             pred_1, pred_2 = predict_maps(logits)
             metrics.update(pred_1, label_1)

@@ -26,6 +26,7 @@ from satchange.execution import (
     world_size,
 )
 from satchange.metrics import BinaryChangeMetrics
+from satchange.step_budget import StepBudget
 
 
 @dataclass
@@ -282,8 +283,10 @@ def train_one_epoch(
     optimizer: Optimizer,
     device: torch.device,
     precision: str = "fp32",
+    *,
+    budget: StepBudget | None = None,
 ) -> float:
-    """Train the model for one complete epoch."""
+    """Train the model for one epoch, or until ``budget`` is exhausted."""
 
     precision_context(device, precision)
     model.train()
@@ -292,6 +295,8 @@ def train_one_epoch(
     total_samples = 0
 
     for batch in data_loader:
+        if budget is not None and budget.exhausted:
+            break
         before = batch["before"].to(
             device,
             non_blocking=True,
@@ -328,6 +333,8 @@ def train_one_epoch(
         optimizer.step()
 
         current_batch_size = before.shape[0]
+        if budget is not None:
+            budget.take(current_batch_size)
 
         total_loss += (
             loss.item()
@@ -574,6 +581,8 @@ def fit_binary_change_model(
     task: str = "binary_change_detection",
     reset_early_stopping: bool = False,
     stop_file: str | Path | None = None,
+    max_optimizer_steps: int | None = None,
+    flops_per_sample: float | None = None,
 ) -> list[dict[str, Any]]:
     """Train or resume, optionally stopping after patience epochs without F1 gain.
 
@@ -581,6 +590,12 @@ def fit_binary_change_model(
     it retains its existing meaning: the maximum number of additional epochs.
     min_epochs refers to the absolute epoch number. Every F1 maximum still saves
     best.pt, even when its gain is smaller than the stopping min_delta.
+
+    ``max_optimizer_steps`` (compute-fair budget, D-048) stops training at that absolute
+    optimizer-step count, possibly inside an epoch; the final partial epoch is validated and
+    checkpointed like any other. It excludes early stopping, and ``number_of_epochs`` must be
+    large enough to reach it. ``flops_per_sample`` (from ``semantic.compute``) adds
+    ``training_flops = flops_per_sample * samples_seen`` to the records.
     """
     from satchange.models.factory import BINARY_TASK, SEMANTIC_TASK
     if task not in (BINARY_TASK, SEMANTIC_TASK):
@@ -592,6 +607,15 @@ def fit_binary_change_model(
     early_stopping = EarlyStopping(patience, min_epochs, min_delta, monitor=score_key)
     if resume_from is None:
         early_stopping.validate_budget(number_of_epochs)
+    budget = StepBudget(max_optimizer_steps) if max_optimizer_steps is not None else None
+    if budget is not None and patience is not None:
+        raise ValueError("A step budget (max_optimizer_steps) excludes early stopping (patience).")
+    if flops_per_sample is not None and (
+        isinstance(flops_per_sample, bool) or not flops_per_sample > 0
+    ):
+        raise ValueError("flops_per_sample must be a positive number.")
+    if flops_per_sample is not None and budget is None:
+        raise ValueError("flops_per_sample is recorded only together with max_optimizer_steps.")
 
     if (
         not isinstance(number_of_epochs, int)
@@ -793,6 +817,21 @@ def fit_binary_change_model(
             early_stopping.last_epoch = saved_epoch
         else:
             early_stopping.load_state_dict(checkpoint.get("early_stopping"), saved_epoch)
+        saved_budget = checkpoint.get("step_budget")
+        if (saved_budget is None) != (budget is None):
+            raise ValueError(
+                "Resume step budget mismatch: the checkpoint and the call must both use "
+                "max_optimizer_steps or neither."
+            )
+        if budget is not None:
+            assert saved_budget is not None
+            restored = StepBudget.from_state(saved_budget)
+            if restored.max_optimizer_steps != budget.max_optimizer_steps:
+                raise ValueError(
+                    "Resume max_optimizer_steps differs from the checkpoint: "
+                    f"{budget.max_optimizer_steps} vs {restored.max_optimizer_steps}."
+                )
+            budget = restored
         best_weights = _best_weights(checkpoint, resume_path)
         on_rank_zero(lambda: restore_best_checkpoint(
             checkpoint, resume_path, run_directory / "best.pt"
@@ -825,6 +864,16 @@ def fit_binary_change_model(
     if early_stopping.should_stop:
         # An already early-stopped checkpoint is a completed run, not a restart.
         return metric_history
+    if budget is not None:
+        if budget.exhausted:
+            return metric_history  # the step budget was already spent: completed run
+        remaining = budget.remaining
+        assert remaining is not None
+        if len(train_loader) * number_of_epochs < remaining:
+            raise ValueError(
+                f"number_of_epochs={number_of_epochs} x {len(train_loader)} steps per epoch "
+                f"cannot reach the remaining step budget of {remaining} optimizer steps."
+            )
 
     for epoch in range(
         start_epoch,
@@ -852,7 +901,8 @@ def fit_binary_change_model(
             if not isinstance(loss_function, SemanticSCDLoss):
                 raise ValueError("Semantic task requires SemanticSCDLoss.")
             train_loss = run_epoch(bare_model, train_loader, loss_function, device,
-                                   precision=precision, optimizer=optimizer)["loss"]
+                                   precision=precision, optimizer=optimizer,
+                                   budget=budget)["loss"]
             validation_results = run_epoch(bare_model, validation_loader, loss_function, device,
                                            precision=precision)
             epoch_score = validation_results["selection_score"]
@@ -864,6 +914,7 @@ def fit_binary_change_model(
                 optimizer=optimizer,
                 device=device,
                 precision=precision,
+                budget=budget,
             )
 
             train_loss = sum(gather_objects(train_loss)) / world_size()
@@ -1017,6 +1068,12 @@ def fit_binary_change_model(
                 "peak_gpu_memory_mb": peak_gpu_memory_mb,
             }
 
+        if budget is not None:
+            epoch_metrics.update(budget.state_dict())
+            if flops_per_sample is not None:
+                epoch_metrics["flops_per_sample"] = flops_per_sample
+                epoch_metrics["training_flops"] = flops_per_sample * budget.samples_seen
+
         metric_history.append(
             epoch_metrics
         )
@@ -1025,9 +1082,11 @@ def fit_binary_change_model(
             epoch_metrics[score_key]
         )
 
-        should_stop = early_stopping.step(current_f1, epoch)
+        budget_spent = budget is not None and budget.exhausted
+        should_stop = early_stopping.step(current_f1, epoch) or budget_spent
         stop_reason = (
-            "early_stopping" if should_stop and epoch < final_epoch
+            "step_budget" if budget_spent
+            else "early_stopping" if should_stop and epoch < final_epoch
             else "max_epochs" if epoch == final_epoch
             else None
         )
@@ -1090,6 +1149,8 @@ def fit_binary_change_model(
         }
         if semantic:
             checkpoint_state["task"] = task
+        if budget is not None:
+            checkpoint_state["step_budget"] = budget.state_dict()
 
         def save_epoch(
             checkpoint_state: dict[str, Any] = checkpoint_state,
@@ -1190,6 +1251,11 @@ def fit_binary_change_model(
                     f"gain > {early_stopping.min_delta:g}. "
                     f"Best checkpoint: epoch {(best_metrics or {})['epoch']}, "
                     f"{score_key}={best_f1:.6f}."
+                )
+            elif stop_reason == "step_budget" and budget is not None:
+                print(
+                    f"{log_prefix}Step budget spent at epoch {epoch}: "
+                    f"{budget.optimizer_steps} optimizer steps, {budget.samples_seen} samples."
                 )
             break
 
