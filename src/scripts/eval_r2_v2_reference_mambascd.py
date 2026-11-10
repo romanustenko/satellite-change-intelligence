@@ -111,8 +111,9 @@ def main() -> None:
         handle.flush()
         os.fsync(handle.fileno())
     os.replace(temporary, args.output)
+    computed = {rule: m.compute() for rule, m in metrics.items()}
     print(json.dumps({rule: {k: round(v, 4) for k, v in m.items() if k in ("sek", "miou", "fscd")}
-                      for rule, m in record["metrics"].items()}), flush=True)
+                      for rule, m in computed.items()}), flush=True)
 
 
 if __name__ == "__main__":
