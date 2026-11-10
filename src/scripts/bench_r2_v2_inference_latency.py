@@ -4,9 +4,9 @@ Protocol matches the Research 1 forward benchmark (H5): FP32, TF32 off, batch 1,
 ``torch.inference_mode``, warm-up, CUDA-synchronised timing of the model forward only (no I/O,
 resize, H2D, sigmoid, thresholding, ROI extraction or reconstruction). Weights are irrelevant to
 latency, so every model is built from its architecture parameters (SCD: random init; detectors:
-``metadata.json`` of ``artifacts/final_models/<variant>``) and no checkpoint is opened. Detectors are
-measured at their Research 1 input size (sanity check against the historical numbers) and at the
-SECOND tile size. Run only on an idle GPU; GPU load before and after is recorded.
+``metadata.json`` of ``artifacts/final_models/<variant>``) and no checkpoint is opened. Detectors
+are measured at their Research 1 input size (sanity check against the historical numbers) and at
+the SECOND tile size. Run only on an idle GPU; GPU load before and after is recorded.
 
 Usage: python src/scripts/bench_r2_v2_inference_latency.py --device cuda:0 --physical-gpu 2 \
     --output <json>
