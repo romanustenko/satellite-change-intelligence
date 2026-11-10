@@ -47,4 +47,4 @@ class SECONDSemanticDataset(SECONDBinaryDataset):
         sample: dict[str, Any] = {
             "before": before, "after": after, "mask": mask, **labels, "sample_id": sample_id,
         }
-        return self.transform(sample) if self.transform is not None else sample
+        return self._finish(sample)

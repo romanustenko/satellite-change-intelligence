@@ -5,8 +5,9 @@ A SECOND root that contains ``second_split_manifest.json`` (written by
 shared trainer: change = any pixel whose T1 label is not non-change (ID 0). T1 and T2 change
 support must agree, as in the SECOND annotation protocol; disagreement fails loudly. Samples keep
 the LEVIR-CD contract: ``before``/``after`` float32 [3,H,W] in [0,1], ``mask`` float32 [1,H,W]
-in {0,1}, ``sample_id``. No normalization; optional whole-scene resize (bilinear RGB, nearest
-mask) exactly as for LEVIR-CD.
+in {0,1}, ``sample_id``. No normalization by default (``input_normalization`` opts in, applied to
+the images after ``transform``); optional whole-scene resize (bilinear RGB, nearest mask) exactly
+as for LEVIR-CD.
 """
 
 from collections.abc import Callable
@@ -18,6 +19,7 @@ import torch
 from PIL import Image
 from torch.utils.data import Dataset
 
+from satchange.data.normalization import normalize_sample, validate_input_normalization
 from satchange.semantic.data import file_digest
 from satchange.semantic.second import decode_label, read_second_split_manifest
 
@@ -52,6 +54,8 @@ class SECONDBinaryDataset(Dataset):
         split: str,
         image_size: int | None,
         transform: Callable[[dict[str, Any]], dict[str, Any]] | None = None,
+        *,
+        input_normalization: str | None = None,
     ) -> None:
         if split not in SPLITS:
             raise ValueError(f"Unsupported split {split!r}; expected one of {SPLITS}.")
@@ -62,6 +66,7 @@ class SECONDBinaryDataset(Dataset):
         self.split = split
         self.image_size = image_size
         self.transform = transform
+        self.input_normalization = validate_input_normalization(input_normalization)
         self.sample_ids = list(self.manifest["splits"][split])
         if not self.sample_ids:
             raise ValueError(f"SECOND manifest split {split!r} is empty.")
@@ -117,4 +122,10 @@ class SECONDBinaryDataset(Dataset):
         sample: dict[str, Any] = {
             "before": before, "after": after, "mask": mask, "sample_id": sample_id,
         }
-        return self.transform(sample) if self.transform is not None else sample
+        return self._finish(sample)
+
+    def _finish(self, sample: dict[str, Any]) -> dict[str, Any]:
+        """Apply the geometric transform, then the optional input normalization."""
+        if self.transform is not None:
+            sample = self.transform(sample)
+        return normalize_sample(sample, self.input_normalization)

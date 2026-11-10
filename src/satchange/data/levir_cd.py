@@ -504,6 +504,8 @@ def create_dataset_dataloader(
     generator: torch.Generator | None = None,
     seed: int | None = None,
     semantic_labels: bool = False,
+    *,
+    input_normalization: str | None = None,
 ) -> tuple["LEVIRCDDataset | SECONDBinaryDataset", DataLoader]:
     """Create one LEVIR-CD dataset split and its data loader."""
 
@@ -525,6 +527,7 @@ def create_dataset_dataloader(
             split=split,
             image_size=image_size,
             transform=transform,
+            input_normalization=input_normalization,
         )
     elif is_second_binary_root(dataset_root):
         dataset = SECONDBinaryDataset(
@@ -532,8 +535,11 @@ def create_dataset_dataloader(
             split=split,
             image_size=image_size,
             transform=transform,
+            input_normalization=input_normalization,
         )
     else:
+        if input_normalization is not None:
+            raise ValueError("input_normalization is only supported for SECOND roots.")
         dataset = LEVIRCDDataset(
             dataset_root=dataset_root,
             split=split,
