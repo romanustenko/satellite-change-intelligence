@@ -1,0 +1,78 @@
+{
+  "frozen_utc": "2026-11-12T15:13:34Z",
+  "calibrated_on": "light_full",
+  "seeds": [
+    42,
+    123,
+    777
+  ],
+  "resamples": 2000,
+  "bootstrap_seed": 20261110,
+  "code_git_revision": "166e4223605541993984cd874db8e26fe7d88cd9",
+  "grid": {
+    "thresholds": [
+      0.2,
+      0.35,
+      0.5,
+      0.65,
+      0.8,
+      0.9,
+      0.95,
+      0.98,
+      0.99
+    ],
+    "margins": [
+      0,
+      16,
+      32
+    ],
+    "merge_gaps": [
+      0,
+      16,
+      32,
+      64,
+      128,
+      "inf"
+    ],
+    "min_crops": [
+      64,
+      128
+    ]
+  },
+  "budgets": [
+    0.2,
+    0.3,
+    0.4,
+    0.5,
+    0.6,
+    0.8,
+    1.0
+  ],
+  "small_budget": 0.5,
+  "small_area_px": 1024,
+  "large_area_px": 8192,
+  "single_crop_coverage": 0.95,
+  "noise_components": {
+    "fmr": {
+      "mean": 0.8175584326118628,
+      "ci95": [
+        0.8061082974617972,
+        0.8313401054106686
+      ],
+      "ci_half_width": 0.012615903974435683,
+      "two_sd_over_seeds": 0.005870310780599567
+    },
+    "small": {
+      "mean": 0.5455897315488769,
+      "ci95": [
+        0.5051692486648041,
+        0.6007060242144783
+      ],
+      "ci_half_width": 0.04776838777483711,
+      "two_sd_over_seeds": 0.0386162984961642
+    }
+  },
+  "delta_fmr": 0.012615903974435683,
+  "delta_small": 0.04776838777483711,
+  "rule": "recall-eligible: seed-mean FMR >= best FMR - delta_fmr AND seed-mean small-stratum single-crop coverage at area budget small_budget >= best - delta_small; among eligible detectors the lowest forward latency (M7) wins, ties -> fewer crops (M4). Confidence intervals are not equivalence tests; the user makes the decision."
+}
