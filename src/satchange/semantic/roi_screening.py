@@ -15,7 +15,9 @@ import cv2
 import numpy as np
 from scipy.sparse.csgraph import connected_components  # type: ignore[import-untyped]
 
-THRESHOLDS = (0.2, 0.35, 0.5, 0.65, 0.8)
+# 0.9-0.99 added after the Light calibration (D-065): at <= 0.8 the cheapest setting already costs
+# 0.47 of the tile, so budgets 0.2-0.4 were unreachable.
+THRESHOLDS = (0.2, 0.35, 0.5, 0.65, 0.8, 0.9, 0.95, 0.98, 0.99)
 MARGINS = (0, 16, 32)
 MERGE_GAPS: tuple[int | None, ...] = (0, 16, 32, 64, 128, None)
 MIN_CROPS = (64, 128)
@@ -57,7 +59,7 @@ class ScreeningSettings:
 
 
 def settings_grid() -> list[ScreeningSettings]:
-    """The 180 declared settings in a fixed order."""
+    """The 324 declared settings (9 x 3 x 6 x 2: threshold, margin, gap, min side), fixed order."""
     return [
         ScreeningSettings(t, m, g, c)
         for t, m, g, c in itertools.product(THRESHOLDS, MARGINS, MERGE_GAPS, MIN_CROPS)

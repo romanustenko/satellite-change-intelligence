@@ -3,7 +3,7 @@
 Three subcommands (docs/research2/DETECTOR_SCREENING_PLAN.md §3):
 
 ``infer``      fine-tuned detector -> probability maps on the 444 validation tiles -> per-tile ROI
-               count tables for the whole 180-setting generator grid (M1-M6 inputs) and detector
+               count tables for the whole 324-setting generator grid (M1-M6 inputs) and detector
                diagnostics (M8). Writes ``artifacts/research2/v2/screening/<det>_s<seed>/``.
 ``calibrate``  noise of FMR and of the small-stratum coverage on Light only -> writes the frozen
                rule ``configs/SCREENING_RULE.json`` (it must be committed before any other detector

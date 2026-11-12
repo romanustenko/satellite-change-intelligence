@@ -14,7 +14,7 @@ def _mask(boxes: list[tuple[int, int, int, int]], size: int = 128) -> np.ndarray
 
 
 def test_grid_has_declared_size_and_validates() -> None:
-    assert len(rs.settings_grid()) == 5 * 3 * 6 * 2
+    assert len(rs.settings_grid()) == 9 * 3 * 6 * 2
     with pytest.raises(ValueError):
         rs.ScreeningSettings(0.0, 0, 0, 64)
     with pytest.raises(ValueError):
