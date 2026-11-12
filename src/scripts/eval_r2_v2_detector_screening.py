@@ -62,12 +62,14 @@ def _rule_is_committed() -> bool:
     return tracked and clean
 
 
-def run_directory(group: str, detector: str, seed: int) -> Path:
-    return RUNS / group / detector / f"{detector}_s{seed}"
+def run_directory(group: str, detector: str, seed: int, name: str | None = None) -> Path:
+    return RUNS / group / detector / (name or f"{detector}_s{seed}")
 
 
-def _load_detector(group: str, detector: str, seed: int) -> tuple[torch.nn.Module, dict[str, Any]]:
-    run = run_directory(group, detector, seed)
+def _load_detector(
+    group: str, detector: str, seed: int, name: str | None = None
+) -> tuple[torch.nn.Module, dict[str, Any]]:
+    run = run_directory(group, detector, seed, name)
     record = json.loads((run / "run_record.json").read_text())
     state = torch.load(run / "best.pt", map_location="cpu", weights_only=False)  # own file
     weights = state.get("best_model_state_dict") or state["model_state_dict"]
@@ -123,7 +125,7 @@ def infer(args: argparse.Namespace) -> None:
             f"Refusing to evaluate {args.detector}: {RULE.relative_to(ROOT)} must exist and be "
             "committed first (calibration on Light only, plan VS-T05)."
         )
-    model, record = _load_detector(args.group, args.detector, args.seed)
+    model, record = _load_detector(args.group, args.detector, args.seed, args.name)
     started = time.perf_counter()
     probabilities, masks, ids = _probability_maps(model, resolve_device(args.device))
     infer_seconds = time.perf_counter() - started
@@ -131,7 +133,7 @@ def infer(args: argparse.Namespace) -> None:
         tables = list(pool.map(_tile_table, zip(probabilities, masks, strict=True), chunksize=4))
     table = np.stack(tables, axis=1)  # [settings, tiles, fields]
     out = OUT / ("" if args.group == "screening" else f"_{args.group}") / (
-        f"{args.detector}_s{args.seed}"
+        args.name or f"{args.detector}_s{args.seed}"
     )
     out.mkdir(parents=True, exist_ok=True)
     np.savez_compressed(out / "table.npz", table=table, ids=ids)
@@ -151,8 +153,9 @@ def infer(args: argparse.Namespace) -> None:
 # --- aggregation ---------------------------------------------------------------------------
 
 
-def _load_tables(detector: str, seeds: list[int]) -> list[np.ndarray]:
-    tables = [np.load(OUT / f"{detector}_s{seed}/table.npz")["table"] for seed in seeds]
+def _load_tables(directories: list[Path]) -> list[np.ndarray]:
+    detector = directories[0].name
+    tables = [np.load(directory / "table.npz")["table"] for directory in directories]
     if len({t.shape for t in tables}) != 1:
         raise ValueError(f"{detector}: tables of different shape across seeds.")
     return tables
@@ -206,12 +209,12 @@ def _interval(values: np.ndarray) -> list[float]:
 
 
 def calibrate(args: argparse.Namespace) -> None:
-    tables = _load_tables(FIRST_DETECTOR, args.seeds)
+    tables = _load_tables([OUT / f"{FIRST_DETECTOR}_s{seed}" for seed in args.seeds])
     budgets, small_budget = rs.BUDGETS, 0.5
     summary = detector_summary(_statistics(tables, args.resamples), budgets, small_budget)
     fmr_ci = _interval(summary["fmr_boot"])
     small_ci = _interval(summary["small_boot"])
-    parts = {
+    parts: dict[str, dict[str, Any]] = {
         "fmr": {
             "mean": float(summary["fmr_seed"].mean()), "ci95": fmr_ci,
             "ci_half_width": (fmr_ci[1] - fmr_ci[0]) / 2,
@@ -236,8 +239,12 @@ def calibrate(args: argparse.Namespace) -> None:
         "small_area_px": rs.SMALL_AREA, "large_area_px": rs.LARGE_AREA,
         "single_crop_coverage": rs.SINGLE_CROP_COVERAGE,
         "noise_components": parts,
-        "delta_fmr": max(parts["fmr"]["ci_half_width"], parts["fmr"]["two_sd_over_seeds"]),
-        "delta_small": max(parts["small"]["ci_half_width"], parts["small"]["two_sd_over_seeds"]),
+        "delta_fmr": (
+            max(parts["fmr"]["ci_half_width"], parts["fmr"]["two_sd_over_seeds"])
+        ),
+        "delta_small": (
+            max(parts["small"]["ci_half_width"], parts["small"]["two_sd_over_seeds"])
+        ),
         "rule": (
             "recall-eligible: seed-mean FMR >= best FMR - delta_fmr AND seed-mean small-stratum "
             "single-crop coverage at area budget small_budget >= best - delta_small; among "
@@ -260,19 +267,28 @@ def report(args: argparse.Namespace) -> None:
     grid = rs.settings_grid()
     result: dict[str, Any] = {"rule": rule, "detectors": {}}
     summaries: dict[str, dict[str, Any]] = {}
-    for detector in args.detectors:
-        tables = _load_tables(detector, args.seeds)
+    # Exploratory single-run entries (LABEL=SUBDIR under screening/, e.g. the D-068 extended Heavy
+    # run) are reported next to the frozen-rule detectors but never enter the eligibility rule.
+    sources = {d: [OUT / f"{d}_s{seed}" for seed in args.seeds] for d in args.detectors}
+    for item in args.extra:
+        label, _, subdir = item.partition("=")
+        sources[label] = [OUT / subdir]
+    for detector, directories in sources.items():
+        tables = _load_tables(directories)
         stats = _statistics(tables, rule["resamples"])
         summary = detector_summary(stats, budgets, small_budget)
         summaries[detector] = summary
         diagnostics = [
-            json.loads((OUT / f"{detector}_s{s}/diagnostics.json").read_text())["diagnostics"]
-            for s in args.seeds
+            json.loads((directory / "diagnostics.json").read_text())["diagnostics"]
+            for directory in directories
         ]
         entry: dict[str, Any] = {
+            "exploratory": detector not in args.detectors,
             "fmr": {"seed_values": summary["fmr_seed"].tolist(),
                     "mean": float(summary["fmr_seed"].mean()),
-                    "sd_seeds": float(summary["fmr_seed"].std(ddof=1)),
+                    "sd_seeds": (
+                        float(summary["fmr_seed"].std(ddof=1)) if len(directories) > 1 else None
+                    ),
                     "ci95_tiles": _interval(summary["fmr_boot"])},
             "small_coverage_at_budget": {
                 "seed_values": summary["small_seed"].tolist(),
@@ -306,9 +322,10 @@ def report(args: argparse.Namespace) -> None:
                 for key, value in stats.items() if key.startswith("point_")
             }
         result["detectors"][detector] = entry
-    best_fmr = max(s["fmr_seed"].mean() for s in summaries.values())
-    best_small = max(s["small_seed"].mean() for s in summaries.values())
-    for detector, summary in summaries.items():
+    ruled = {d: s for d, s in summaries.items() if d in args.detectors}
+    best_fmr = max(s["fmr_seed"].mean() for s in ruled.values())
+    best_small = max(s["small_seed"].mean() for s in ruled.values())
+    for detector, summary in ruled.items():
         entry = result["detectors"][detector]
         entry["eligible_fmr"] = bool(summary["fmr_seed"].mean() >= best_fmr - rule["delta_fmr"])
         entry["eligible_small"] = bool(
@@ -325,7 +342,7 @@ def report(args: argparse.Namespace) -> None:
     }
     Path(args.output).write_text(json.dumps(result, indent=2) + "\n")
     print(json.dumps({d: {k: e[k] for k in ("eligible_fmr", "eligible_small", "eligible")}
-                      for d, e in result["detectors"].items()}, indent=2))
+                      for d, e in result["detectors"].items() if d in ruled}, indent=2))
 
 
 def main() -> None:
@@ -335,6 +352,7 @@ def main() -> None:
     p.add_argument("--detector", required=True, choices=["light_full", "medium_full", "heavy_full"])
     p.add_argument("--seed", type=int, required=True)
     p.add_argument("--group", default="screening", help="run group under runs/ (default: finals)")
+    p.add_argument("--name", help="run directory name if not <detector>_s<seed> (e.g. extended)")
     p.add_argument("--device", required=True)
     p.add_argument("--workers", type=int, default=8)
     p.set_defaults(func=infer)
@@ -345,6 +363,8 @@ def main() -> None:
     p = sub.add_parser("report")
     p.add_argument("--detectors", nargs="+", default=["light_full", "medium_full", "heavy_full"])
     p.add_argument("--seeds", type=int, nargs="+", default=[42, 123, 777])
+    p.add_argument("--extra", nargs="*", default=[], metavar="LABEL=SUBDIR",
+                   help="exploratory single runs under screening/, outside the rule")
     p.add_argument("--latency", help="JSON {detector: median forward latency ms}")
     p.add_argument("--output", required=True)
     p.set_defaults(func=report)
