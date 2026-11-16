@@ -18,6 +18,7 @@ only by
 """
 
 import json
+import os
 import sys
 from pathlib import Path
 from typing import Any
@@ -35,7 +36,9 @@ from satchange.semantic import roi_screening as rs  # noqa: E402
 ROOT = Path(__file__).resolve().parents[2]
 DATA = ROOT / "data/SECOND"
 RUNS = ROOT / "artifacts/research2/v2/runs"
-V9 = ROOT / "artifacts/research2/v2/v9"
+# R2_V9_DIR / R2_SCD_ROOT redirect outputs and SCD checkpoints (plumbing tests only)
+V9 = Path(os.environ.get("R2_V9_DIR", ROOT / "artifacts/research2/v2/v9"))
+SCD_ROOT = Path(os.environ.get("R2_SCD_ROOT", ROOT / "artifacts/research2/v2/runs/final"))
 SEEDS = (42, 123, 777)
 SCD_MODELS = ("siam_unet_resnet18", "scannet", "mamba_scd")
 SHORT = {"siam_unet_resnet18": "unet", "scannet": "scannet", "mamba_scd": "mamba"}
@@ -57,7 +60,7 @@ FRONTIER_BUDGETS = (0.7, 0.5, 0.3)
 
 
 def scd_run_dir(model: str, seed: int) -> Path:
-    return RUNS / "final" / model / f"{SHORT[model]}_final_s{seed}"
+    return SCD_ROOT / model / f"{SHORT[model]}_final_s{seed}"
 
 
 def map_path(split: str, variant: str, seed: int) -> Path:

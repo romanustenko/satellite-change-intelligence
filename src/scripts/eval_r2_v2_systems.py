@@ -38,6 +38,9 @@ from satchange.semantic.system_eval import load_semantic_checkpoint
 rs = lib.rs
 FROZEN_CODE = (
     "src/satchange", "src/scripts/eval_r2_v2_systems.py", "src/scripts/r2_v2_systems_lib.py",
+    "src/scripts/bench_r2_v2_two_stage_speedups.py",
+    "src/scripts/eval_r2_v2_two_stage_exploratory.py",
+    "src/scripts/eval_r2_v2_detector_screening.py", "configs/SCREENING_RULE.json",
 )
 
 
@@ -104,7 +107,7 @@ def evaluate_pair(
             systems[f"{case}__{policy}"] = (case, policy)
     systems["oracle__balanced"] = ("oracle", "balanced")
     store: dict[str, dict[str, list]] = {k: {"hist": [], "crops": [], "box_area": [],
-                                              "window_area": [], "union_area": []}
+                                              "window_area": [], "union_area": [], "buckets": []}
                                           for k in systems}
     started = time.perf_counter()
     for index, sample in enumerate(samples):
@@ -132,6 +135,10 @@ def evaluate_pair(
                 else 0)
             row["window_area"].append(lib.processed_window_area(boxes) if spec else lib.TILE ** 2)
             row["union_area"].append(union_area(boxes) if len(boxes) else 0)
+            row["buckets"].append(
+                [sum(1 for box in boxes.tolist() if spec and lib.window_bucket(box) == b)
+                 for b in lib.BUCKETS] if spec else [0, 0, 0, 0]
+            )
         if index % 50 == 0:
             print(model_name, seed, f"{index}/{count}", f"{time.perf_counter() - started:.0f}s",
                   flush=True)
@@ -139,7 +146,9 @@ def evaluate_pair(
                                                for s in samples])}
     for key, row in store.items():
         for field, values in row.items():
-            arrays[f"{field}__{key}"] = np.stack(values) if field == "hist" else np.array(values)
+            arrays[f"{field}__{key}"] = (
+                np.stack(values) if field == "hist" else np.array(values)
+            )
     out_dir.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     with temporary.open("wb") as handle:
@@ -147,7 +156,7 @@ def evaluate_pair(
     temporary.replace(path)
     (out_dir / f"{model_name}_s{seed}.json").write_text(json.dumps({
         "model": model_name, "seed": seed, "split": split, "tiles": count,
-        "checkpoint": str((lib.scd_run_dir(model_name, seed) / "best.pt").relative_to(lib.ROOT)),
+        "checkpoint": str(lib.scd_run_dir(model_name, seed) / "best.pt"),
         "checkpoint_sha256": sha256_file(lib.scd_run_dir(model_name, seed) / "best.pt"),
         "partner": partner, "inference_path": "batch_ctx", "seconds": time.perf_counter() - started,
         "git_revision": _git("rev-parse", "HEAD"),
