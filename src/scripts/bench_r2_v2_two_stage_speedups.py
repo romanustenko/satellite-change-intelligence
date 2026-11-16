@@ -1,21 +1,30 @@
-"""Latency speed-up probes for the exploratory two-stage system on SECOND validation (user request 2026-11-16).
+"""Latency speed-up probes for the exploratory two-stage system on SECOND validation (user request
+2026-11-16).
 
-Measurement only: nothing is trained or tuned, the test split is never read, ``src/satchange`` is not
-touched. Same pilot SCD checkpoints, same Medium (BIT) detector probability maps (seed 42) and the same
-ROI policies as ``eval_r2_v2_two_stage_exploratory.py``. Hypotheses tested (the cheap Resized detector
+Measurement only: nothing is trained or tuned, the test split is never read, ``src/satchange`` is
+not
+touched. Same pilot SCD checkpoints, same Medium (BIT) detector probability maps (seed 42) and the
+same
+ROI policies as ``eval_r2_v2_two_stage_exploratory.py``. Hypotheses tested (the cheap Resized
+detector
 is deliberately excluded, the detector is fixed to Medium, D-067):
 
-* H1 batching crops: ``batch_exact`` (crops of identical size in one forward) and ``batch_ctx`` (every
-  crop replaced by a square window of a bucket size 128/256/384/512 cut from the tile around the crop, so
+* H1 batching crops: ``batch_exact`` (crops of identical size in one forward) and ``batch_ctx``
+  (every
+  crop replaced by a square window of a bucket size 128/256/384/512 cut from the tile around the
+  crop, so
   that crops batch; only the original box is merged back, the extra pixels are real context).
-* H3 launch-overhead removal: bf16 autocast. CUDA graphs were tried first and rejected: capture of these
-  models fails in the default mode (torch 2.12.1+cu130) and the "relaxed" mode silently replays wrong
+* H3 launch-overhead removal: bf16 autocast. CUDA graphs were tried first and rejected: capture of
+  these
+  models fails in the default mode (torch 2.12.1+cu130) and the "relaxed" mode silently replays
+  wrong
   outputs (max |graph - eager| = 0.23 on U-Net), so no graph numbers are reported.
 * H4 fixed grid: 128x128 / 256x256 cells overlapping any ROI box, one batched forward, no context.
 * H5 skip empty tiles: fraction of tiles without any box (no run needed).
 
 Quality (SeK) is computed for every variant on the same tiles; timing = per tile, CUDA-synchronised,
-includes CPU box generation, H2D, forward(s), merging and D2H of the two label maps (as in the earlier
+includes CPU box generation, H2D, forward(s), merging and D2H of the two label maps (as in the
+earlier
 exploratory harness). Run on an idle GPU; load is recorded.
 
 Usage: python src/scripts/bench_r2_v2_two_stage_speedups.py --device cuda:1 --tiles 200 --out <dir>
@@ -50,7 +59,7 @@ ROOT = base.ROOT
 
 
 class Runner:
-    """Model call with optional bf16 autocast (CUDA graphs were tried and rejected, see docstring)."""
+    """Model call with optional bf16 autocast (CUDA graphs rejected, see module docstring)."""
 
     def __init__(self, model: torch.nn.Module, *, bf16: bool) -> None:
         self.model, self.bf16 = model, bf16
@@ -137,8 +146,9 @@ def scene(kind: str, runner: Runner, sample: dict[str, Any], boxes: np.ndarray, 
             wy = min(max((y0 + y1) // 2 - bucket // 2, 0), 512 - bucket)
             groups_ctx.setdefault(bucket, []).append((box, wx, wy))
         for bucket, members in groups_ctx.items():
-            stack_b = torch.stack([before[:, wy:wy + bucket, wx:wx + bucket] for _, wx, wy in members])
-            stack_a = torch.stack([after[:, wy:wy + bucket, wx:wx + bucket] for _, wx, wy in members])
+            window = [(slice(wy, wy + bucket), slice(wx, wx + bucket)) for _, wx, wy in members]
+            stack_b = torch.stack([before[:, rows, cols] for rows, cols in window])
+            stack_a = torch.stack([after[:, rows, cols] for rows, cols in window])
             probability, log_prob = forward_batch(runner, stack_b, stack_a)
             for index, ((x0, y0, x1, y1), wx, wy) in enumerate(members):
                 sl_y, sl_x = slice(y0 - wy, y1 - wy), slice(x0 - wx, x1 - wx)
@@ -223,7 +233,8 @@ def main() -> None:
         for name, settings in policies.items()
     }
     skip = {
-        name: float(np.mean([len(b) == 0 for b in boxes])) for name, boxes in boxes_by_policy.items()
+        name: float(np.mean([len(b) == 0 for b in boxes]))
+        for name, boxes in boxes_by_policy.items()
     }
 
     results: dict[str, Any] = {
