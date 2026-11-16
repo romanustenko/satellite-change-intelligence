@@ -46,7 +46,10 @@ DETECTORS = {
     "light_full": (2024, "12fd0449554cdbddb04258dd0f312a3479768d23fd51d83ca55c9429f13f306c"),
     "medium_full": (123, "8680db04cea68e588217906ba93d78d3422cba9f6b8e11b031b4ce2992bd922a"),
     "heavy_full": (42, "738c757b644174501fcf8584de05db94bcb702d43ff8b2523cbba1b477bd6b42"),
+    # D-074: case-4 partner candidate; Research 1 "Resized" regime = whole scene resized to 256.
+    "light_resized": (42, "a4becfc385ad7382159cfce9259de2738d549d0161cb8b42f79c247318f0aa6a"),
 }
+IMAGE_SIZES = {"light_resized": 256}  # detectors fed a resized whole scene; others run at 512
 
 
 class WarmupCosineAdamW(torch.optim.AdamW):
@@ -85,10 +88,17 @@ def _sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def build_detector(name: str) -> tuple[torch.nn.Module, dict[str, Any]]:
-    """Detector architecture from its Research 1 metadata, weights loaded strictly (CPU)."""
+def build_detector(name: str, *, init: str = "research1") -> tuple[torch.nn.Module, dict[str, Any]]:
+    """Detector architecture from Research 1 metadata; weights loaded strictly (CPU) or random."""
     directory = FINAL_MODELS / name
     metadata = json.loads((directory / "metadata.json").read_text())
+    if init == "scratch":  # case 3 (D-046): same architecture, SECOND only, no LEVIR-CD weights
+        model = create_task_model(metadata["model_name"], metadata["model_parameters"], BINARY_TASK)
+        return model, {
+            "checkpoint": None, "sha256": None, "research1_seed": None, "init": "scratch",
+            "model_name": metadata["model_name"],
+            "model_parameters": metadata["model_parameters"],
+        }
     seed, expected = DETECTORS[name]
     checkpoint = directory / f"seed_{seed}_best.pt"
     digest = _sha256(checkpoint)
@@ -101,6 +111,7 @@ def build_detector(name: str) -> tuple[torch.nn.Module, dict[str, Any]]:
         "checkpoint": str(checkpoint.relative_to(ROOT)),
         "sha256": digest,
         "research1_seed": seed,
+        "init": "research1",
         "model_name": metadata["model_name"],
         "model_parameters": metadata["model_parameters"],
     }
@@ -117,20 +128,25 @@ def main() -> None:
     parser.add_argument("--group", required=True, help="subdirectory of runs/")
     parser.add_argument("--name", required=True)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--init", choices=("research1", "scratch"), default="research1",
+        help="research1: fine-tune the LEVIR-CD checkpoint (case 2); scratch: random init (case 3)",
+    )
     args = parser.parse_args()
 
     device = resolve_device(args.device)
     torch.backends.cuda.matmul.allow_tf32 = False
     torch.backends.cudnn.allow_tf32 = False
     seed_everything(args.seed)
+    image_size = IMAGE_SIZES.get(args.detector)  # None = native 512
     _, train_loader = create_dataset_dataloader(
-        DATA, "train", None, BATCH_SIZE, args.num_workers, transform=RandomFlipRotate(),
+        DATA, "train", image_size, BATCH_SIZE, args.num_workers, transform=RandomFlipRotate(),
         shuffle=True, pin_memory=True, drop_last=True, seed=args.seed,
     )
     _, validation_loader = create_dataset_dataloader(
-        DATA, "val", None, BATCH_SIZE, args.num_workers, pin_memory=True
+        DATA, "val", image_size, BATCH_SIZE, args.num_workers, pin_memory=True
     )
-    model, init_report = build_detector(args.detector)
+    model, init_report = build_detector(args.detector, init=args.init)
     model = model.to(device)
     loss_function = BCEDiceLoss(**LOSS).to(device)
 
@@ -153,7 +169,8 @@ def main() -> None:
         "model_parameters": init_report["model_parameters"],
         "init": init_report,
         "recipe": {
-            "input_size": 512, "batch_size": BATCH_SIZE, "input_normalization": "none ([0,1])",
+            "input_size": image_size or 512, "batch_size": BATCH_SIZE,
+            "input_normalization": "none ([0,1])",
             "optimizer": "AdamW", "lr": args.lr, "weight_decay": args.weight_decay,
             "schedule": f"warmup {WARMUP_FRACTION} + cosine per step", "loss": LOSS,
             "precision": "fp32 (TF32 off)", "thresholds": THRESHOLDS,
@@ -162,6 +179,7 @@ def main() -> None:
         "flop_budget": args.flop_budget,
         "optimizer_steps": steps,
         "seed": args.seed,
+        "init_mode": args.init,
         "step_flops": step_flops.to_record(),
     }
     started = time.perf_counter()
@@ -177,6 +195,7 @@ def main() -> None:
     last = history[-1]
     record = {
         "group": args.group, "name": args.name, "model": args.detector, "seed": args.seed,
+        "init": args.init,
         "lr": args.lr, "weight_decay": args.weight_decay, "flop_budget": args.flop_budget,
         "optimizer_steps": last["optimizer_steps"], "epochs_run": len(history),
         "samples_seen": last["samples_seen"], "training_flops": last["training_flops"],
