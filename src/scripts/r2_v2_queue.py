@@ -208,6 +208,15 @@ def launch(job: Job, gpu: int) -> None:
     print(time.strftime("%F %T"), "launched", job.name, "on cuda:", gpu, flush=True)
 
 
+def mamba_fits(
+    fresh: list[Job], gpus: dict[int, dict[str, float]], reserved: dict[int, float]
+) -> bool:
+    """True when a waiting MambaSCD job fits a reserved GPU now (else leave them usable)."""
+    job = next((j for j in fresh if j.model == "mamba_scd"), None)
+    candidates = {g: s for g, s in gpus.items() if g in MAMBA_GPUS and s["own"] == 0.0}
+    return job is not None and place(job, candidates, reserved) is not None
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--dry-run", action="store_true")
@@ -241,7 +250,8 @@ def main() -> None:
         mamba_waiting = any(j.model == "mamba_scd" for j in fresh)
         for job in fresh:
             candidates = {g: s for g, s in gpus.items() if count[g] < args.max_own_jobs_per_gpu}
-            if job.model != "mamba_scd" and mamba_waiting:
+            keep_free = mamba_waiting and mamba_fits(fresh, gpus, reserved)
+            if job.model != "mamba_scd" and keep_free:
                 candidates = {g: s for g, s in candidates.items() if g not in MAMBA_GPUS}
             if job.model == "mamba_scd":
                 candidates = {g: s for g, s in candidates.items() if count[g] == 0}
