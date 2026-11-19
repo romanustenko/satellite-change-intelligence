@@ -104,7 +104,16 @@ def main() -> None:
     )
     parser.add_argument("--name", required=True)
     parser.add_argument("--num-workers", type=int, default=4)
+    parser.add_argument(
+        "--resume", action="store_true",
+        help="exact resume of an interrupted run from its last.pt (same group/name/seed/budget)",
+    )
     args = parser.parse_args()
+    resume_from = None
+    if args.resume:
+        resume_from = RUNS / args.group / args.model / args.name / "last.pt"
+        if not resume_from.is_file():
+            raise FileNotFoundError(f"nothing to resume: {resume_from}")
 
     device = resolve_device(args.device)
     # fp32 everywhere, TF32 explicitly off (training precision is a protocol item).
@@ -208,6 +217,7 @@ def main() -> None:
         semantic_argmax=SEMANTIC_ARGMAX,
         pseudo_labeler=labeler,
         lr_factor=functools.partial(warmup_cosine_factor, total_steps=steps),
+        resume_from=resume_from,
     )
     seconds = time.perf_counter() - started
     best = max(history, key=lambda row: row["selection_score"])

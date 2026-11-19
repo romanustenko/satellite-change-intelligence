@@ -194,7 +194,7 @@ def place(job: Job, gpus: dict[int, dict[str, float]], reserved: dict[int, float
     return None if best is None else best[1]
 
 
-def launch(job: Job, gpu: int) -> None:
+def launch(job: Job, gpu: int, *, resume: bool = False) -> None:
     LOG_DIR.mkdir(parents=True, exist_ok=True)
     command = [
         sys.executable, str(RUNNER), "--model", job.model, "--flop-budget", str(job.budget),
@@ -202,10 +202,13 @@ def launch(job: Job, gpu: int) -> None:
         "--device", f"cuda:{gpu}", "--group", job.group, "--name", job.name,
         "--num-workers", str(WORKERS),
     ]
+    if resume:
+        command.append("--resume")
     with (LOG_DIR / f"{job.name}.log").open("ab") as log:
         subprocess.Popen(command, cwd=ROOT, stdout=log, stderr=subprocess.STDOUT,
                          start_new_session=True)
-    print(time.strftime("%F %T"), "launched", job.name, "on cuda:", gpu, flush=True)
+    print(time.strftime("%F %T"), "resumed" if resume else "launched", job.name, "on cuda:", gpu,
+          flush=True)
 
 
 def mamba_fits(
@@ -223,6 +226,10 @@ def main() -> None:
     parser.add_argument("--gpus", type=int, nargs="+", default=[0, 1, 2, 3])
     parser.add_argument("--poll", type=int, default=120)
     parser.add_argument("--max-own-jobs-per-gpu", type=int, default=2)
+    parser.add_argument(
+        "--resume-stalled", action="store_true",
+        help="resume jobs that stopped without a record (server restart) from their last.pt",
+    )
     args = parser.parse_args()
     seen_alive: set[str] = set()
     while True:
@@ -247,10 +254,15 @@ def main() -> None:
         started = []
         # never start a job that previously ran and vanished without a record (needs a human)
         fresh = [j for j in pending if not (RUNS / j.group / j.model / j.name).exists()]
-        mamba_waiting = any(j.model == "mamba_scd" for j in fresh)
-        for job in fresh:
+        resumable = [
+            j for j in pending
+            if args.resume_stalled and (RUNS / j.group / j.model / j.name / "last.pt").is_file()
+        ]
+        queue_jobs = [*resumable, *(j for j in fresh if j not in resumable)]
+        mamba_waiting = any(j.model == "mamba_scd" for j in queue_jobs)
+        for job in queue_jobs:
             candidates = {g: s for g, s in gpus.items() if count[g] < args.max_own_jobs_per_gpu}
-            keep_free = mamba_waiting and mamba_fits(fresh, gpus, reserved)
+            keep_free = mamba_waiting and mamba_fits(queue_jobs, gpus, reserved)
             if job.model != "mamba_scd" and keep_free:
                 candidates = {g: s for g, s in candidates.items() if g not in MAMBA_GPUS}
             if job.model == "mamba_scd":
@@ -259,12 +271,12 @@ def main() -> None:
             if gpu is None:
                 continue
             if not args.dry_run:
-                launch(job, gpu)
+                launch(job, gpu, resume=job in resumable)
             started.append(f"{job.name}@{gpu}")
             if job.model == "mamba_scd":
                 launched = {x.split("@")[0] for x in started}
                 mamba_waiting = any(
-                    j.model == "mamba_scd" and j.name not in launched for j in fresh
+                    j.model == "mamba_scd" and j.name not in launched for j in queue_jobs
                 )
             reserved[gpu] += NEED_GB[job.model]
             count[gpu] += 1
