@@ -3,7 +3,7 @@
 Measured on SECOND *validation* tiles (the test split is never read here), batch 1, fp32, TF32 off,
 ``torch.inference_mode``, one process on one GPU that should be idle (the background load of the
 card before and after the run is recorded; a card with > 10 % mean utilisation is refused unless
-``--allow-busy``; memory held by idle foreign processes is only recorded, it does not change latency).
+``--allow-busy``; memory held by idle foreign processes is only recorded, not a reason).
 One tile = host tensors -> device -> [detector forward(s) -> OR (case 4) -> probability map to
 host -> ROI boxes] -> SCD forward(s) on the boxes (``batch_ctx``) -> merge -> both class maps back
 to the host; the clock stops after a device synchronisation. Case 1 skips the bracketed part.
