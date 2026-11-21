@@ -34,9 +34,18 @@ def main() -> None:
     parser.add_argument("--edges", type=float, nargs=2, required=True)
     parser.add_argument("--protocol", type=Path, required=True)
     parser.add_argument("--output", type=Path, required=True)
+    parser.add_argument(
+        "--allow-unrelated-dirty", action="store_true",
+        help="allow uncommitted tracked changes outside src/, tests/, configs/ (recorded)",
+    )
     args = parser.parse_args()
     if args.delta <= 0 or args.edges[0] >= args.edges[1]:
         raise ValueError("delta must be positive and the two density edges ascending")
+    dirty = [line.split(None, 1)[1] for line in lib.subprocess_git("status", "--porcelain",
+                                                     "--untracked-files=no").splitlines()]
+    if dirty and not (args.allow_unrelated_dirty and all(
+            not path.startswith(("src/", "tests/", "configs/", "pyproject")) for path in dirty)):
+        raise RuntimeError(f"uncommitted tracked changes: {dirty}")
     partner_file = lib.V9 / "case4_partner.json"
     policy_file = lib.V9 / "roi_policies.json"
     flops_file = lib.V9 / "inference_flops.json"
@@ -52,6 +61,7 @@ def main() -> None:
                         for m, p in hpo_results.items()},
         "inference_path": "batch_ctx", "primary_policy": "frontier0.5",
         "seed_pairing": "two-stage system of SCD seed s uses detector seed s",
+        "unrelated_uncommitted_files": dirty,
     }
     evidence_path = lib.V9 / "freeze_evidence.json"
     if evidence_path.exists():
@@ -79,7 +89,7 @@ def main() -> None:
             }
     args.output.parent.mkdir(parents=True, exist_ok=True)
     manifest = build_freeze_manifest(systems, root=lib.ROOT, protocol=args.protocol,
-                                     output=args.output)
+                                     output=args.output, allow_dirty=bool(dirty))
     print(json.dumps({"output": str(args.output), "git_revision": manifest["git_revision"],
                       "systems": len(manifest["systems"])}))
 

@@ -19,6 +19,7 @@ only by
 
 import json
 import os
+import subprocess
 import sys
 from pathlib import Path
 from typing import Any
@@ -57,6 +58,11 @@ CASES = {"case2": "medium_ft", "case3": "medium_scratch", "case4": "or"}
 # area-budget frontier settings chosen on validation per case (``select`` in prepare_r2_v2_val.py).
 FIXED_POLICY = {"balanced": rs.ScreeningSettings(0.5, 16, 32, 64)}
 FRONTIER_BUDGETS = (0.7, 0.5, 0.3)
+
+
+def subprocess_git(*arguments: str) -> str:
+    return subprocess.run(["git", *arguments], capture_output=True, text=True, cwd=ROOT,
+                          check=True).stdout.strip()
 
 
 def scd_run_dir(model: str, seed: int) -> Path:
