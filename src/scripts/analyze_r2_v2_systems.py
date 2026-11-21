@@ -125,6 +125,8 @@ def main() -> None:
     result: dict = {"split": args.split, "tiles": tiles, "resamples": args.resamples,
                     "delta": args.delta, "primary_policy": PRIMARY_POLICY, "models": {}}
     latency_path = lib.V9 / f"latency_{args.split}.json"
+    if not latency_path.exists():  # latency is measured once, on validation tiles (protocol §5)
+        latency_path = lib.V9 / "latency_val.json"
     latency = json.loads(latency_path.read_text()) if latency_path.exists() else {}
     seed_sd = {}
     for model in models:
