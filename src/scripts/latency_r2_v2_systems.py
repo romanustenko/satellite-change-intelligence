@@ -2,7 +2,8 @@
 
 Measured on SECOND *validation* tiles (the test split is never read here), batch 1, fp32, TF32 off,
 ``torch.inference_mode``, one process on one GPU that should be idle (the background load of the
-card before and after the run is recorded; a busy card is refused unless ``--allow-busy``).
+card before and after the run is recorded; a card with > 10 % mean utilisation is refused unless
+``--allow-busy``; memory held by idle foreign processes is only recorded, it does not change latency).
 One tile = host tensors -> device -> [detector forward(s) -> OR (case 4) -> probability map to
 host -> ROI boxes] -> SCD forward(s) on the boxes (``batch_ctx``) -> merge -> both class maps back
 to the host; the clock stops after a device synchronisation. Case 1 skips the bracketed part.
@@ -39,8 +40,7 @@ from satchange.semantic.system_eval import load_semantic_checkpoint
 scr = lib.scr
 SEED = 42
 BOOT_SEED = 20261121
-BUSY_UTIL_PERCENT = 10
-BUSY_MEMORY_MB = 2000
+BUSY_UTIL_PERCENT = 10  # memory held by idle foreign processes is recorded, not a reason to refuse
 
 
 def _git(*arguments: str) -> str:
@@ -48,14 +48,20 @@ def _git(*arguments: str) -> str:
                           check=True).stdout.strip()
 
 
-def gpu_background(device: torch.device) -> dict[str, float]:
-    """Utilisation / memory of the card right now (nvidia-smi), to document the load."""
+def gpu_background(device: torch.device, samples: int = 10) -> dict[str, float]:
+    """Mean/max utilisation and memory of the card over ~samples seconds (nvidia-smi)."""
     index = device.index if device.index is not None else 0
-    out = subprocess.run(
-        ["nvidia-smi", "-i", str(index), "--query-gpu=utilization.gpu,memory.used",
-         "--format=csv,noheader,nounits"], capture_output=True, text=True, check=True,
-    ).stdout.strip().split(",")
-    return {"utilization_percent": float(out[0]), "memory_used_mb": float(out[1])}
+    utilisation, memory = [], []
+    for _ in range(samples):
+        out = subprocess.run(
+            ["nvidia-smi", "-i", str(index), "--query-gpu=utilization.gpu,memory.used",
+             "--format=csv,noheader,nounits"], capture_output=True, text=True, check=True,
+        ).stdout.strip().split(",")
+        utilisation.append(float(out[0]))
+        memory.append(float(out[1]))
+        time.sleep(1.0)
+    return {"utilization_percent": sum(utilisation) / len(utilisation),
+            "utilization_max_percent": max(utilisation), "memory_used_mb": max(memory)}
 
 
 def load_detector(variant: str, device: torch.device):
@@ -135,8 +141,7 @@ def main() -> None:
     torch.backends.cudnn.allow_tf32 = False
     device = resolve_device(args.device)
     before_load = gpu_background(device)
-    if not args.allow_busy and (before_load["utilization_percent"] > BUSY_UTIL_PERCENT
-                                or before_load["memory_used_mb"] > BUSY_MEMORY_MB):
+    if not args.allow_busy and before_load["utilization_percent"] > BUSY_UTIL_PERCENT:
         raise SystemExit(f"GPU is not idle ({before_load}); latency needs an idle card")
     out_dir = args.out or lib.V9
     partner = lib.partner_name()
