@@ -63,7 +63,7 @@ w("**Short answer (SECOND, our implementation, primary ROI policy `frontier0.5`,
   f"(margin δ = {DELTA}) for all three SCD models, but the two-stage system costs **more** inference FLOPs than the single-stage "
   "model, because the detector alone costs about as much as a Siamese U-Net pass and the context windows add the area back. "
   "Only the aggressive `frontier0.3` policy gets below the single-stage FLOPs (SCanNet only), at a clearly inferior SeK. "
-  "A negative result is a valid outcome (D-001). The latency section below says whether wall-clock changes the picture.\n")
+  "A negative result is a valid outcome (D-001). Wall-clock latency points the same way (§5).\n")
 adj_all = test["primary_holm"]["adjusted_p"]
 sig = [k for k, v in adj_all.items() if v < 0.05]
 w("Findings in one list (all from the tables below):")
@@ -81,6 +81,12 @@ w("- **H3 (detector training).** case 2 vs case 3: " + ("no significant differen
 w("- **H4 (OR ensemble).** case 4 vs case 2: " + ("no significant difference after Holm" if not any("case4 vs case2" in k for k in sig)
   else "significant for some models") + " (Holm p = " + ", ".join(
     f"{v:.2f}" for k, v in adj_all.items() if "case4 vs case2" in k) + "); the extra detector costs FLOPs without a reliable gain.")
+if lat is not None:
+    w("- **Latency (wall-clock, validation tiles, batch 1).** Median ratio vs single-stage at `" + P + "` (case 2): " + ", ".join(
+        f"{NAMES[m]} ×{lat[m][f'case2__{P}']['ratio_vs_single']['median']:.2f} "
+        f"(CI {lat[m][f'case2__{P}']['ratio_vs_single']['ci95'][0]:.2f}…{lat[m][f'case2__{P}']['ratio_vs_single']['ci95'][1]:.2f})"
+        for m in NAMES) + " — slower for every model, also at `frontier0.3`; wall-clock does not rescue the two-stage system "
+        "(box generation, host round trips and several small batches per tile cost more than the saved area).")
 w("- **H5 (density).** The penalty of SCanNet and MambaSCD is larger on tiles with little change (−0.006…−0.010) than on dense tiles (−0.002…−0.005); "
   "for U-Net the two-stage system gains on sparse tiles (+0.003) and loses slightly on dense ones.")
 w("- **H1 (architecture).** Single-stage SeK: " + ", ".join(
@@ -194,7 +200,9 @@ if lat is None:
 else:
     meta = lat["_meta"]
     w(f"GPU {meta['gpu']}, {meta['tiles'] - meta['warmup_tiles']} timed tiles, seed {meta['seed']}; background before "
-      f"{meta['background_before']}, after {meta['background_after']}.\n")
+      f"{meta['background_before']}, after {meta['background_after']}. The card was quiet when the run started; foreign load appeared "
+      "during the run (mean utilisation afterwards above), so absolute milliseconds, mainly of the later SCanNet and MambaSCD parts, may be inflated. "
+      "Systems are interleaved per tile and ratios are paired per tile, which makes the ratios robust to such load; they were not re-measured on a fully idle card.\n")
     w("| SCD model | system | median ms | p95 ms | detector stage ms | ratio vs single (median of per-tile ratios, CI95) |")
     w("|---|---|---|---|---|---|")
     for m in NAMES:
