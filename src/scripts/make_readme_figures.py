@@ -13,6 +13,7 @@ import datetime as dt
 import glob
 import json
 from pathlib import Path
+from typing import Any
 
 import matplotlib
 
@@ -226,11 +227,109 @@ def r2_cost(window: dict) -> None:
     save(fig, "r2_when_cheaper.png")
 
 
+THEMES = {"light": {"ink": "#1f2328", "muted": "#59636e", "scd": "#0969da", "det": "#bc4c00"},
+          "dark": {"ink": "#e6edf3", "muted": "#9198a1", "scd": "#4493f8", "det": "#db6d28"}}
+
+
+def architecture(demo: Path, key: str = "04") -> None:
+    """Single-stage vs two-stage pipeline on one SECOND validation tile, transparent background,
+    one variant per GitHub theme (used with a ``<picture>`` element)."""
+    example = next(e for e in json.loads((demo / "demo/manifest.json").read_text())["examples"]
+                   if e["id"] == key)
+    folder = demo / "demo" / key
+    t1, t2 = (np.asarray(Image.open(demo / "data" / f"{key}_{d}.jpg").convert("RGB"))
+              for d in ("t1", "t2"))
+    probability = np.asarray(Image.open(folder / "detector.png"), dtype=float) / 255
+
+    def classes(name: str) -> np.ndarray:
+        return CLASS_COLORS[np.asarray(Image.open(folder / f"{name}.png"))]
+
+    for theme in THEMES:
+        _architecture_figure(theme, example, t1, t2, probability, classes)
+
+
+def _architecture_figure(theme: str, example: dict, t1: np.ndarray, t2: np.ndarray,
+                         probability: np.ndarray, classes: Any) -> None:
+    """One theme variant of the pipeline figure (see ``architecture``)."""
+    c = THEMES[theme]
+    fig = plt.figure(figsize=(12, 5.6))
+    ax = fig.add_axes((0, 0, 1, 1))
+    ax.set_xlim(0, 100)
+    ax.set_ylim(0, 47)
+    ax.set_aspect("equal")
+    ax.axis("off")
+
+    def tile(image: np.ndarray, x: float, y: float, layer: int = 2, **kw: Any) -> None:
+        ax.imshow(image, extent=(x, x + 12, y, y + 12), zorder=layer, **kw)
+        ax.add_patch(plt.Rectangle((x, y), 12, 12, fill=False, ec=c["muted"], lw=0.6,
+                                   zorder=layer + 0.5))
+
+    def pair(first: np.ndarray, second: np.ndarray, x: float, y: float, top: str,
+             bottom: str) -> None:
+        tile(first, x, y + 2.2, layer=2)
+        tile(second, x + 2.2, y, layer=3)
+        ax.text(x + 7.1, y + 15.6, top, ha="center", fontsize=9, color=c["muted"])
+        ax.text(x + 7.1, y - 1.6, bottom, ha="center", va="top", fontsize=9,
+                color=c["muted"])
+
+    def stage(x: float, y: float, width: float, title: str, note: str, color: str) -> None:
+        ax.add_patch(matplotlib.patches.FancyBboxPatch(
+            (x, y), width, 9, boxstyle="round,pad=0,rounding_size=1.2", fc=color,
+            alpha=0.13, ec="none", zorder=1))
+        ax.add_patch(matplotlib.patches.FancyBboxPatch(
+            (x, y), width, 9, boxstyle="round,pad=0,rounding_size=1.2", fill=False,
+            ec=color, lw=1.4, zorder=2))
+        ax.text(x + width / 2, y + 5.6, title, ha="center", va="center", fontsize=11.5,
+                fontweight="bold", color=c["ink"])
+        ax.text(x + width / 2, y + 2.6, note, ha="center", va="center", fontsize=8.5,
+                color=c["muted"])
+
+    def arrow(x0: float, x1: float, y: float) -> None:
+        ax.annotate("", (x1, y), (x0, y), arrowprops={"arrowstyle": "-|>", "lw": 1.3,
+                                                     "color": c["muted"]})
+
+    rows = {"single": 29.5, "two": 4.5}
+    for name, y in rows.items():
+        label = "Single-stage" if name == "single" else "Two-stage"
+        ax.text(0, y + 16.2, label, fontsize=13, fontweight="bold", color=c["ink"])
+        pair(t1, t2, 0, y, "", "image pair T1 / T2")
+        stage(60, y + 2.7, 17, "SCD model", "what changed into what", c["scd"])
+        arrow(77.5, 82.5, y + 7.2)
+        prefix = "scannet_single" if name == "single" else "scannet_two_stage"
+        pair(classes(f"{prefix}_t1"), classes(f"{prefix}_t2"), 83, y, "",
+             "class maps T1 / T2")
+    arrow(15, 59.5, rows["single"] + 7.2)
+    ax.text(37, rows["single"] + 8.4, "whole tile", ha="center", fontsize=9,
+            color=c["muted"])
+    y = rows["two"]
+    arrow(15, 19.5, y + 7.2)
+    stage(20, y + 2.7, 15, "Detector (BIT)", "where? (binary)", c["det"])
+    arrow(35.5, 40.5, y + 7.2)
+    tile(probability, 41, y + 1.2, cmap="magma", vmin=0, vmax=1)
+    for x0, y0, x1, y1 in example["roi_boxes"]:
+        scale = 12 / 512
+        ax.add_patch(plt.Rectangle((41 + x0 * scale, y + 1.2 + 12 - y1 * scale),
+                                   (x1 - x0) * scale, (y1 - y0) * scale, fill=False,
+                                   ec="#ffffff", lw=1.0, ls="--", zorder=5))
+    ax.text(47, y - 1.6, "probability + ROI boxes", ha="center", va="top", fontsize=9,
+            color=c["muted"])
+    arrow(53.5, 59.5, y + 7.2)
+    ax.text(68.5, y + 0.6, "same weights, only ROI windows;\noutside = no change",
+            ha="center", va="top", fontsize=8, color=c["muted"])
+    fig.savefig(OUT / f"architecture_{theme}.png", transparent=True, dpi=170)
+    plt.close(fig)
+    print("written", OUT / f"architecture_{theme}.png", flush=True)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--demo", type=Path, required=True)
+    parser.add_argument("--only", choices=["architecture"])
     args = parser.parse_args()
     OUT.mkdir(parents=True, exist_ok=True)
+    architecture(args.demo)
+    if args.only:
+        return
     results = results_block()
     window = json.loads((V2 / "window_share/window_share.json").read_text())
     r1_hpo()

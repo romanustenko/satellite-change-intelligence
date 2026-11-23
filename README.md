@@ -12,8 +12,11 @@ The central question of the second study:
 > Under which accuracy and compute conditions is a two-stage semantic change detection system
 > preferable to a single-stage one?
 
-<p align="center"><img src="assets/readme/architecture.jpg" width="720"
-alt="Two-stage system (input → detection → ROI → semantic change model → prediction) versus single-stage system (input → semantic change model → prediction)"></p>
+<p align="center"><picture>
+<source media="(prefers-color-scheme: dark)" srcset="assets/readme/architecture_dark.png">
+<img src="assets/readme/architecture_light.png" width="860"
+alt="Single-stage system (image pair → semantic change model → class maps) versus two-stage system (image pair → detector → probability and ROI boxes → the same semantic change model inside the ROI windows → class maps), shown on one SECOND tile">
+</picture></p>
 
 **Short answer:** on the SECOND benchmark, no. The two-stage system is as accurate as the single
 model, but it never needs less compute. It can pay off only when changes cover a small part of the
@@ -59,12 +62,13 @@ its whole reason to exist.
 |---|---|---|
 | Aug 24 – Oct 7 | Research 1: training and HPO of three detector tiers × two input regimes on LEVIR-CD | six final detectors, 542 HPO trials |
 | Oct 20 – Oct 30 | Research 1: hypotheses H1–H11 (resolution, object size, cost, ROI generation) | Full resolution is essential; the ROI policy drives the cost |
-| Nov 6 – Nov 10 | Research 2, first iteration: one own SCD model vs one two-stage system | design did not match the intended study → archived and redesigned |
+| Nov 6 – Nov 10 | Research 2, first iteration: one own SCD model vs one two-stage system, budget in GPU-hours | design did not match the intended study, GPU-hours varied 4–6× with server load → archived and redesigned |
 | Nov 10 – Nov 13 | Research 2 design v2; detector screening on SECOND; pilot for the training budget | BIT (Medium) chosen; budget 3.2·10¹⁷ training FLOPs per run |
 | Nov 16 – Nov 21 | HPO and final training of three SCD models (3 seeds), ROI policies on validation, protocol freeze | 12 frozen systems |
 | Nov 21 – Nov 23 | Single read of the test split; analysis; latency; web demo; cost checks on larger scenes | results below |
 
-The full story — every key decision and every mistake — is in **[REPORT.md](REPORT.md)**.
+The full story of both studies — hypotheses, key decisions and mistakes — is in
+**[REPORT.md](REPORT.md)** (Part I: Research 1, Part II: Research 2).
 
 ## Research 1 — Binary Change Detection (LEVIR-CD)
 
@@ -383,8 +387,7 @@ During this project, I learned:
   SECOND has no geographic metadata, so spatial dependence between tiles is not modelled.
 - ROI policies and δ were chosen on the same validation tiles used to select checkpoints, which is
   optimistic for the two-stage systems.
-- The SCD models were trained on whole tiles and only *applied* to ROI windows. Training them on
-  crops (ablation H6) is not done yet.
+- The SCD models were trained on whole tiles and only *applied* to ROI windows.
 - Our absolute SeK is below published numbers: the training budget is smaller and one shared recipe
   was used for all models.
 - The cost check on larger scenes measures compute only; accuracy at very low change shares is
@@ -392,7 +395,6 @@ During this project, I learned:
 
 ## Next Steps
 
-- **H6:** train the SCD models on ROI crops and test whether the strong models stop losing accuracy.
 - Test accuracy on large real scenes with few changes (e.g. HRSCD, 10 000² pixels).
 - Use a detector that is much cheaper than the SCD model, so that even the light model can profit.
 - Reduce the latency overhead of the two-stage pipeline (box generation, transfers, batching).

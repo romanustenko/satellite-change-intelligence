@@ -1,26 +1,171 @@
 # Satellite Change Intelligence — full report
 
-> The short version is the [README](README.md). This document is for readers
-> who want the whole story: how the study was designed, what was found, which decisions were taken
-> and why, and what went wrong on the way.
+> The short version is the [README](README.md). This document is for readers who want the whole
+> story of both studies: how each was designed, what was found, which decisions were taken and why,
+> and what went wrong on the way.
+
+The project consists of two studies on one PyTorch codebase:
+
+- **[Part I — Research 1](#part-i--research-1-binary-change-detection-levir-cd):** binary change
+  detection on LEVIR-CD — *where* did something change? Three detector tiers trained and tuned by
+  hand, then eleven hypothesis series about resolution, errors, cost and ROI generation.
+- **[Part II — Research 2](#part-ii--research-2-single-stage-vs-two-stage-semantic-change-detection-second):**
+  semantic change detection on SECOND — *what* changed into what? Is a two-stage system
+  (detector from Research 1 → ROI → semantic model) preferable to a single semantic model?
 
 ## Contents
 
-1. [Motivation and question](#1-motivation-and-question)
-2. [Timeline](#2-timeline)
-3. [Study design](#3-study-design)
-4. [Hypotheses and outcomes](#4-hypotheses-and-outcomes)
-5. [Results](#5-results)
-6. [When does a two-stage system pay off?](#6-when-does-a-two-stage-system-pay-off)
-7. [Key decisions](#7-key-decisions)
-8. [Mistakes and lessons](#8-mistakes-and-lessons)
-9. [Limitations](#9-limitations)
-10. [Future work](#10-future-work)
-11. [Reproducibility](#11-reproducibility)
+**Part I — Research 1 (LEVIR-CD)**
+- [1.1 Question and setup](#11-question-and-setup)
+- [1.2 Hyperparameter search](#12-hyperparameter-search)
+- [1.3 Final detectors](#13-final-detectors)
+- [1.4 Hypotheses H1–H5](#14-hypotheses-h1h5)
+- [1.5 ROI experiments H08–H11](#15-roi-experiments-h08h11)
+- [1.6 What Research 1 handed over](#16-what-research-1-handed-over-to-research-2)
+- [1.7 Mistakes and lessons](#17-mistakes-and-lessons-research-1)
+
+**Part II — Research 2 (SECOND)**
+- [2.1 Motivation and question](#21-motivation-and-question)
+- [2.2 Timeline](#22-timeline)
+- [2.3 First iteration: GPU-hour budget](#23-first-iteration-v1-gpu-hour-budget)
+- [2.4 Study design v2](#24-study-design-v2)
+- [2.5 Hypotheses and outcomes](#25-hypotheses-and-outcomes)
+- [2.6 Results](#26-results)
+- [2.7 When does a two-stage system pay off?](#27-when-does-a-two-stage-system-pay-off)
+- [2.8 Key decisions](#28-key-decisions)
+- [2.9 Mistakes and lessons](#29-mistakes-and-lessons-research-2)
+- [2.10 Limitations](#210-limitations)
+- [2.11 Future work](#211-future-work)
+- [2.12 Reproducibility](#212-reproducibility)
 
 ---
 
-## 1. Motivation and question
+# Part I — Research 1: Binary change detection (LEVIR-CD)
+
+## 1.1 Question and setup
+
+**Question:** how do input resolution and model size affect *what* a binary change detector finds
+— and what would it cost to use such a detector as the first stage of a two-stage system?
+
+**Data.** LEVIR-CD: 637 pairs of 1024 × 1024 images (0.5 m / px), binary building-change masks,
+official train / validation / test split. Validation: 64 pairs with 2 788 changed objects
+(connected components); test: 128 pairs with 7 027 objects.
+
+**Models** — three tiers, each trained in two input regimes:
+
+| Tier | Model | Idea |
+|---|---|---|
+| Light | FC-Siam-Diff | small fully convolutional Siamese network; feature differences at every scale |
+| Medium | BIT (ResNet-18 S4, 8-layer decoder) | CNN features + a transformer over a few semantic tokens |
+| Heavy | Siamese MiT-B3 (SegFormer encoder) | hierarchical vision transformer |
+
+- **Full:** native 1024 × 1024 input.
+- **Resized:** the whole scene downscaled to 256 × 256 (16× fewer pixels).
+
+## 1.2 Hyperparameter search
+
+The search was done by hand, in stages; I inspected every stage before choosing the next one. The
+compute budget was deliberately not limited, so that slower schedules and larger grids could be
+tried, and settings that looked worse at first could be revisited.
+
+| Tier | Procedure |
+|---|---|
+| Light | learning-rate and batch-size screens → limited grid → loss → weight decay → model capacity → candidates a–h over three seeds → deterministic reproducibility checks |
+| Medium | six stages: lr × batch → architecture → BCE/Dice weights → weight decay → lr refinement → batch × lr; multi-seed confirmation; final 100-epoch training |
+| Heavy | own resumable, staged HPO controller (40 → 60 → 80 epochs), because single trials took many hours on the shared server and were interrupted |
+
+In total **542 trials**. Every trial record (parameters, learning curves, best epoch, selected
+threshold, GPU time) is kept in `artifacts/hyperparameter_search/`. Thresholds were always selected
+on validation.
+
+GPU time was recorded per trial as the cost measure. Its weakness on a shared server
+(the same job taking very different times depending on other people's load) became clear only in
+Research 2 (§2.3) and led to measuring compute in FLOPs.
+
+## 1.3 Final detectors
+
+LEVIR-CD test, mean ± SD over 3 seeds (Heavy Resized: 1 seed):
+
+| Tier | F1 Full (1024²) | IoU Full | F1 Resized (256²) | IoU Resized | Forward latency Full / Resized |
+|---|---:|---:|---:|---:|---:|
+| Light · FC-Siam-Diff | 0.805 ± 0.038 | 0.675 | 0.737 ± 0.018 | 0.584 | ≈ 170 / 8 ms |
+| Medium · BIT | 0.846 ± 0.007 | 0.733 | 0.684 ± 0.023 | 0.520 | ≈ 172 / 18 ms |
+| Heavy · MiT-B3 | **0.867 ± 0.003** | **0.765** | 0.746 | 0.595 | ≈ 276 / 45 ms |
+
+Latency: model forward only, batch 1, fp32, A100 — no I/O, resizing or ROI generation.
+
+Note: Full and Resized are not a perfectly controlled resolution ablation — the tuned
+hyperparameters differ between regimes (e.g. BIT's embedding size 64 vs 32).
+
+## 1.4 Hypotheses H1–H5
+
+After training, I formulated five hypotheses about *why* the detectors differ. They were tested on
+the test split with paired bootstrap over image pairs (95 % CI).
+
+| | Hypothesis | Key evidence | Outcome |
+|---|---|---|---|
+| H1 | Full resolution helps more for **small** objects than for large ones | contrast (Full − Resized) object recall, small − large: Light **+0.131** [0.058, 0.197], Heavy **+0.228** [0.131, 0.318], Medium −0.040 [−0.143, 0.053] | **supported for Light and Heavy**, not for Medium; depends on threshold and metric |
+| H2 | Heavy's higher F1 comes mainly from **better boundaries** | Heavy − Light: boundary F1 **+0.046**, object recall +0.020 (n.s.); Heavy − Medium: boundary F1 +0.066, object recall **+0.160** | **partly:** boundaries are better, but Heavy also has far fewer false alarms away from objects — not "mainly boundaries" |
+| H3 | Different architectures make **complementary errors**; an OR-ensemble recovers misses | at matched pixel recall ≈ 0.93: Light+Heavy OR object recall **0.606** vs Heavy 0.511 vs Light 0.399 | **supported**, but the ensemble costs the sum of both detectors (≈ 446 ms) |
+| H4 | Higher **pixel F1** does not imply higher **object recall** | Medium Full F1 0.848 > Light Full 0.841, but object recall 0.593 < **0.733**; Medium Resized object recall only 0.050 (merged objects) | **supported** |
+| H5 | More compute does not give proportionally more benefit | Heavy Full: best F1 and object recall, but 1.6× the latency of Light/Medium Full; Resized models 6–20× faster but miss most small objects | **supported**; a fixed alert budget (18 per pair) was too strict to rank models |
+
+<p align="center">
+<img src="assets/readme/r1_recall_vs_latency.png" width="460" alt="Object recall against latency for the six detectors">
+</p>
+
+## 1.5 ROI experiments H08–H11
+
+H4 showed that neither pixel F1 nor object recall says whether the regions handed to a second
+stage actually *contain* the changes. The following series therefore evaluated detectors as ROI
+generators. They used **validation only** (H10–H11: 32 development + 32 audit pairs).
+
+| Series | Question | Main finding |
+|---|---|---|
+| H08 | Which detector + threshold gives the best ROIs? Is Medium's low object recall a bad seed? | Medium's low object recall is reproducible over 3 seeds; its ROIs still cover ≈ 97 % of objects. OR-ensemble: +0.5 pp coverage for +170 ms. |
+| H09 | Medium vs Light at **matched** ROI coverage (≈ 97.5 %) | Medium needs **10 fewer crops per pair** (CI −13.6…−6.7) and **15 pp less processed area**; 135 objects were covered by crops although the mask had no overlap with them |
+| H10 | Do other ROI generators or mask post-processing change the picture? | the generator changes the ranking: with a 128-px grid Medium's advantage shrinks from 10 to ≈ 1 crop; random crops of equal budget cover only 43–46 % of objects |
+| H11 | Grid tile size 32–256, margins, adaptive merging, all six models | 32-px tiles cover 87 % of objects by union but only **5 %** by a single crop; 256-px tiles + 16-px margin reach 98 % single-crop coverage at ≈ 52–58 % processed area |
+
+<p align="center">
+<img src="assets/readme/r1_roi_policies.png" width="820" alt="One LEVIR-CD validation scene with three ROI generation policies">
+</p>
+
+**Lesson of H08–H11:** the ROI policy decides the cost at least as much as the detector — the same
+detector output can produce 15 or 135 boxes. "Coverage by the union of all crops" is misleading
+for a second stage that processes crops independently; coverage by a *single* crop is the relevant
+measure.
+
+## 1.6 What Research 1 handed over to Research 2
+
+- **Detector candidates:** Light, Medium and Heavy Full, plus the OR-ensemble as an option. BIT
+  (Medium) was later chosen by a screening on SECOND (§2.4).
+- **ROI design:** context windows of a few fixed sizes (128 / 256 / …) instead of tiny tiles or exact
+  boxes; the policy must be selected on validation together with the detector.
+- **The main cost question:** how much of the image does the second stage still have to process,
+  and does that save anything once the detector's own cost is counted?
+
+## 1.7 Mistakes and lessons (Research 1)
+
+1. **Notebooks are not a lab journal.** I edited the training notebooks again and again while the
+   training functions changed, so their code no longer matches their saved outputs. What saved the
+   history were the per-trial records in `artifacts/`. *Lesson:* keep code in a versioned library,
+   let notebooks only call it, and write every run's parameters and results to disk.
+2. **Hypotheses H1–H5 and their follow-ups were evaluated on the test split.** With many thresholds
+   and configurations, this makes the test split part of the exploration. From H08 on I used
+   validation only; in Research 2 the test split was read exactly once, after a hashed freeze.
+3. **Metrics can disagree** (H4). Choosing one headline metric too early would have hidden the most
+   interesting behaviour of BIT.
+4. **An arbitrary constraint is not informative** (H5): the 18-alerts budget excluded almost every
+   model. Pareto fronts over several costs were more useful.
+5. **Forward latency is not system cost.** The H5 latencies exclude ROI extraction, transfers and
+   the second stage; Research 2 showed that exactly these parts dominate a two-stage pipeline.
+
+---
+
+# Part II — Research 2: Single-stage vs two-stage semantic change detection (SECOND)
+
+## 2.1 Motivation and question
 
 Semantic change detection answers two questions at once: **where** did something change between
 two images, and **what** was it before and after. Models that do both are expensive. A natural
@@ -31,23 +176,50 @@ expensive semantic model looks only at those regions.
 detection system preferable to a single-stage one?* A negative answer was declared a valid outcome
 from the start.
 
-## 2. Timeline
+## 2.2 Timeline
 
 | When (2026) | Phase | Outcome |
 |---|---|---|
-| Aug 24 – Oct 30 | **Research 1:** binary change detection on LEVIR-CD (542 hand-run HPO trials, then hypotheses H1–H11), three tiers (Light FC-Siam-Diff, Medium BIT, Heavy MiT-B3) × Full / Resized input | six final detectors; Full resolution clearly better than Resized; Heavy best F1 |
-| Nov 6–10 | **Research 2, iteration v1:** one self-built semantic model vs one two-stage system | two-stage slower and less accurate — but the study compared the wrong things (§8.1); archived |
+| Nov 6–10 | **Iteration v1:** one self-built semantic model vs one two-stage system; budget in GPU-hours | two-stage slower and less accurate — but the study compared the wrong things and the budget unit was unreliable (§2.3); archived |
 | Nov 10 | **Scope correction:** 4 system types × 3 published SCD architectures, equal-FLOP budget | design v2 written down before any new code |
 | Nov 10–12 | Detector screening on SECOND validation | Medium (BIT) chosen for the two-stage systems |
 | Nov 12–13 | Pilot: learning rate and common training budget | budget b* = 3.2 × 10¹⁷ FLOPs per final run |
 | Nov 16–18 | HPO (6 trials per model, equal FLOPs) | learning rate / weight decay per model |
 | Nov 18–21 | Final training, 3 seeds × 3 models; ROI policies on validation; freeze | protocol v0.4 frozen with hashes |
 | Nov 21–22 | **Test split read once**; analysis; latency | results below |
-| Nov 22–23 | Web demo; exploratory cost checks (§6) | this report |
+| Nov 22–23 | Web demo; exploratory cost checks (§2.7) | this report |
 
-## 3. Study design
+## 2.3 First iteration (v1): GPU-hour budget
 
-### 3.1 Systems (12)
+**Design.** System A = one self-built semantic model (FC-Siam encoder, date-aware decoder) on the
+whole tile. System B = BIT detector (LEVIR-CD → SECOND) → ROI crops → the same kind of semantic model,
+trained on ROI windows. The compute budget was a **project-wide cap of 120 allocated GPU-hours**
+(soft limit 100), split between the components.
+
+**Hypotheses (v1):**
+
+| | Hypothesis | Outcome (test, 3 seeds) |
+|---|---|---|
+| H-A | For tiles with few changes, B is non-inferior in SeK **and** faster than A | **not supported:** B − A = −0.0095 SeK [−0.0121, −0.0069]; B 4.2–5.2× slower in every density stratum |
+| H-B | B's latency ratio grows with the changed share and exceeds 1 above some density | **partly:** the ratio grows (4.2 → 4.9 → 5.2), but it is above 1 everywhere — the detector alone (17 ms) costs more than all of A (7 ms) |
+| H-C | B's errors come mainly from changes the detector missed | **not supported:** 41 % of missed changed pixels lie outside the ROIs, 59 % inside (semantic-model errors) |
+| H-D | Initialising the detector from LEVIR-CD needs fewer GPU-hours to reach a target F1 on SECOND than training from scratch | **supported** (pilot, 3/3 seeds): target reached after 3–13 instead of 19–23 epochs |
+
+**Why GPU-hours failed as a budget.** The same 40-epoch pilot job took ≈ 0.4 h on an idle A100
+and 1.7–2.5 h when other people's jobs were running — a factor of 4–6 that has nothing to do with
+the model. H-D therefore had to be judged in *epochs*, not in GPU-hours, and a GPU-hour cap would
+have given models different amounts of training depending on the server load. In v2 the budget is
+measured in **training FLOPs** and converted into a fixed number of optimizer steps; GPU-hours are
+only reported.
+
+**Why v1 was archived.** Besides the budget unit, v1 compared one self-built model with one two-stage
+system, while the intended study compares published architectures of different complexity in four
+system types. v1 cost ≈ 80 GPU-hours; its infrastructure (SECOND loaders, SCD metrics, ROI
+extraction, latency harness, bootstrap statistics, freeze manifest) was reused in v2.
+
+## 2.4 Study design (v2)
+
+### Systems (12)
 
 | Case | System | Detector (*where*) | Semantic model (*what*) |
 |---|---|---|---|
@@ -66,14 +238,17 @@ checkpoint — only the input changes — so any difference comes from the detec
 that contains it → predictions merged back; everything outside the boxes is "no change", so a missed
 change is an error.
 
-### 3.2 Data
+**Detector choice.** Light, Medium and Heavy were fine-tuned on SECOND train under equal FLOPs and
+compared on validation by a rule fixed beforehand; Medium (BIT) was chosen.
+
+### Data
 
 SECOND: 4 662 pairs of 512 × 512 aerial images, six land-cover classes (non-vegetated ground, tree,
 low vegetation, water, building, playground) plus "no change". The official training set was split
 into train 2 524 / validation 444 by filename groups (frozen manifest); the official test set
 (1 694 tiles) was used once.
 
-### 3.3 Metrics
+### Metrics
 
 - **SeK** (primary): Cohen's kappa on the semantic confusion matrix with the dominant
   "no change → no change" cell removed, multiplied by `exp(IoU_change − 1)` — it punishes both wrong
@@ -81,7 +256,7 @@ into train 2 524 / validation 444 by filename groups (frozen manifest); the offi
 - mIoU and Fscd (secondary); forward FLOPs per tile (incl. the detector); wall-clock latency
   (batch 1, fp32, A100, paired per tile).
 
-### 3.4 Fairness rules
+### Fairness rules
 
 - **Equal training FLOPs** for every semantic model (HPO included), turned into a fixed step count.
   Equal FLOPs means the light model makes ~8× more optimizer steps than SCanNet — that is intended.
@@ -92,7 +267,7 @@ into train 2 524 / validation 444 by filename groups (frozen manifest); the offi
   in SeK (95 % CI lower bound > −δ, δ = 0.007) **and** cheaper in FLOPs; better but dearer = trade-off;
   non-inferior but dearer = single-stage preferable.
 
-## 4. Hypotheses and outcomes
+## 2.5 Hypotheses and outcomes
 
 | | Hypothesis | Outcome |
 |---|---|---|
@@ -101,11 +276,10 @@ into train 2 524 / validation 444 by filename groups (frozen manifest); the offi
 | H3 | LEVIR-CD pre-training of the detector helps (case 2 > case 3) | **not shown** (≤ +0.001 SeK, Holm p ≥ 0.19) |
 | H4 | The OR-ensemble detector helps (case 4 > case 2) | **not shown** (Holm p ≥ 0.23) |
 | H5 | The two-stage effect depends on the share of changed pixels | **yes:** U-Net gains only on sparse tiles; strong models lose least on dense tiles |
-| H6 | Training the semantic model on ROI crops does not help (ablation) | **not run yet** (§10) |
 
-## 5. Results
+## 2.6 Results
 
-### 5.1 Main table (test, primary ROI policy)
+### Main table (test, primary ROI policy)
 
 | Model | Case | SeK | ΔSeK vs single (CI95) | FLOPs × | Box / window area | Verdict |
 |---|---|---|---|---|---|---|
@@ -124,7 +298,7 @@ into train 2 524 / validation 444 by filename groups (frozen manifest); the offi
 
 Latency (case 2 vs single, median of per-tile ratios): U-Net ×2.45, SCanNet ×1.92, MambaSCD ×1.99.
 
-### 5.2 Accuracy–compute curve (case 2, all four ROI policies)
+### Accuracy–compute curve (case 2, all four ROI policies)
 
 | Model | balanced | frontier0.7 | frontier0.5 (primary) | frontier0.3 |
 |---|---|---|---|---|
@@ -135,7 +309,7 @@ Latency (case 2 vs single, median of per-tile ratios): U-Net ×2.45, SCanNet ×1
 Only one configuration is cheaper than the single stage (SCanNet, frontier0.3), and it loses
 0.031 SeK.
 
-### 5.3 Density strata (H5; ΔSeK case 2 − single)
+### Density strata (H5; ΔSeK case 2 − single)
 
 | Share of changed pixels ρ | U-Net | SCanNet | MambaSCD |
 |---|---|---|---|
@@ -147,13 +321,13 @@ On dense tiles the boxes cover almost the whole tile and both systems converge. 
 detector matters most: it seems to remove U-Net's false alarms (gain) but, for the stronger models,
 its misses outweigh that (loss). `This mechanism is an interpretation, not measured separately.`
 
-### 5.4 Headroom: oracle ROIs
+### Headroom: oracle ROIs
 
 With boxes taken from the ground truth, every model would gain +0.018 to +0.021 SeK at ≈ 0.98×
 FLOPs (no detector charged). The idea has headroom; the real detector (pixel recall 0.86–0.89)
 does not capture it.
 
-## 6. When does a two-stage system pay off?
+## 2.7 When does a two-stage system pay off?
 
 Exploratory checks after the test (validation data only, compute only, no accuracy).
 
@@ -191,28 +365,28 @@ Binned by changed share, the SECOND and LEVIR-CD curves agree. Conclusions:
 - Open: whether accuracy holds at such low change shares. On SECOND's sparse stratum the strong
   models lost 0.006–0.007 SeK.
 
-## 7. Key decisions
+## 2.8 Key decisions
 
 | Decision | Why | Alternative rejected |
 |---|---|---|
-| Measure training compute in FLOPs and stop by step count | GPU-hours on a shared server depend on other people's jobs | project-wide GPU-hour cap (used in v1) |
+| Measure training compute in FLOPs and stop by step count | GPU-hours on a shared server depend on other people's jobs (§2.3) | project-wide GPU-hour cap (used in v1) |
 | Train all three semantic models ourselves | published checkpoints had seen our validation split; MambaSCD's was selected on the test split | compare against published weights |
 | Reimplement SCanNet from the paper | its code has no licence | copy the authors' code |
-| Use the *same* semantic checkpoint inside the two-stage systems | isolates the effect of detector + cropping | train a separate crop model (kept as ablation H6) |
+| Use the *same* semantic checkpoint inside the two-stage systems | isolates the effect of detector + cropping | train a separate crop model |
 | Choose the detector by a frozen screening rule on validation | avoid picking the detector that happens to look best later | choose by test or by intuition |
-| Context windows of fixed sizes (128/256/384/512) | windows of equal size can be batched on the GPU | exact box crops (one forward pass per box, used in v1) |
+| Context windows of fixed sizes (128/256/384/512) | windows of equal size can be batched on the GPU (lesson of H10–H11) | exact box crops (one forward pass per box, used in v1) |
 | Non-inferiority margin δ and density strata fixed by a mechanical rule before the test | no room to tune the conclusion | choose δ after seeing results |
-| Read the test split exactly once, through a hashed freeze manifest | the test result must not influence any choice | iterate on test |
+| Read the test split exactly once, through a hashed freeze manifest | the test result must not influence any choice (lesson of Research 1) | iterate on test |
 | Publish only precomputed masks in the demo, no weights | dataset and model licences | interactive inference online |
 
-## 8. Mistakes and lessons
+## 2.9 Mistakes and lessons (Research 2)
 
 1. **The first iteration studied the wrong thing.** The intended design (four system types, three
    published architectures) was in my head but not on paper; v1 compared one self-built model with
    one two-stage system. Four days and ≈ 80 GPU-hours were archived.
    *Lesson:* write the design — what is compared and how it is judged — before writing code.
-2. **A GPU-hour budget on a shared server is not a fair budget.** Throughput changed with other
-   people's load. Switched to training FLOPs and fixed step counts.
+2. **A GPU-hour budget on a shared server is not a fair budget** (§2.3). Throughput changed 4–6×
+   with other people's load. Switched to training FLOPs and fixed step counts.
 3. **The test split was read in v1 for preliminary systems.** The v2 systems are new and frozen
    separately, but aggregate v1 numbers were known — documented as a threat to validity.
 4. **The first ROI-settings grid could not reach small area budgets** (minimum 0.47 of the tile), so
@@ -222,7 +396,7 @@ Binned by changed share, the SECOND and LEVIR-CD curves agree. Conclusions:
    the grid was not extended. Possibly none of the detectors is at its optimal learning rate.
 6. **Equal FLOPs ≠ equal opportunity.** At the screening budget the Heavy detector got only ≈ 6
    epochs and was undertrained; a 5× longer run (one seed) reached F1 0.694 vs Medium 0.688.
-7. **The cost could have been predicted on paper.** The formula in §6 with the measured detector
+7. **The cost could have been predicted on paper.** The formula in §2.7 with the measured detector
    cost and window area explains the main result. A back-of-the-envelope cost model before the
    experiments would have shown which conditions to test.
 8. **Long runs on a shared server get interrupted.** Five final runs were resumed exactly from
@@ -230,42 +404,33 @@ Binned by changed share, the SECOND and LEVIR-CD curves agree. Conclusions:
    killed, integrity checked). Resumable training paid off.
 9. **Latency on a shared GPU:** foreign load appeared during the measurement; ratios are paired per
    tile and robust, absolute milliseconds may be inflated.
-10. **Notebooks are not a lab journal.** In Research 1 I edited the training notebooks again and
-    again while the training functions changed, so their code no longer matches their saved
-    outputs. What saved the history were the per-trial records in `artifacts/`. *Lesson:* keep code
-    in a versioned library, let notebooks only call it, and write every run's parameters and
-    results to disk.
-11. **Demo details matter:** an inverted colour legend in dark mode, maps blocking touch scrolling,
+10. **Demo details matter:** an inverted colour legend in dark mode, maps blocking touch scrolling,
     and a "processed area" column showing the box instead of the window area (documented in the
     README, not yet changed on the page) — all found by testing the page as a user.
 
-What I learned from all this is summarised in the [README](README.md#what-i-learned).
+What I learned from both studies is summarised in the [README](README.md#what-i-learned).
 
-## 9. Limitations
+## 2.10 Limitations
 
 - One dataset (SECOND), one implementation per architecture, three seeds; no geographic metadata,
   so spatial dependence between tiles is not modelled.
 - ROI policies, ensemble partner and δ were chosen on the same validation tiles used to select
   checkpoints (optimistic for the two-stage systems).
-- The semantic models were not trained on crops (deliberately unfavourable for two-stage; ablation
-  H6 pending).
+- The semantic models were trained on whole tiles and only applied to ROI windows.
 - Our absolute SeK is below published numbers: smaller training budget and a shared recipe.
-- §6 measures compute only; accuracy on large, sparse scenes is untested.
+- §2.7 measures compute only; accuracy on large, sparse scenes is untested.
 
-## 10. Future work
+## 2.11 Future work
 
-- **H6 — crop-trained semantic model:** does training on ROI windows recover the accuracy lost by
-  the strong models?
 - **Accuracy on large real scenes** with low change share (e.g. HRSCD, 10 000² px, semantic labels).
 - **A cheaper detector:** U-Net would need a detector well below its own cost.
 - **Engineering the latency:** box generation, host round trips and small batches cost more time
   than the saved area.
 
-## 11. Reproducibility
+## 2.12 Reproducibility
 
 - Every run records git revision, PyTorch/CUDA versions, GPU model, steps and FLOPs.
 - Frozen protocol and code are hashed in a freeze manifest; the single test read is recorded.
 - MambaSCD's `selective_scan` backward pass is not bitwise deterministic; its runs rely on seeds.
 - Compute: 1.44 × 10¹⁸ training FLOPs per semantic model (HPO 4.8 × 10¹⁷ + finals 9.6 × 10¹⁷),
   4 × A100-80GB shared server.
-
