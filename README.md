@@ -462,3 +462,8 @@ Datasets and third-party work:
 
 Datasets and run outputs are not included in the repository. The six final Research 1 detectors
 are stored with Git LFS in `artifacts/final_models/`; the Research 2 SCD weights are not published.
+
+## License
+
+Code: [MIT](LICENSE). The MambaSCD port (`src/satchange/models/mamba_scd.py`,
+`selective_scan.py`) stays under Apache-2.0 with its notice. Datasets keep their own licences.
