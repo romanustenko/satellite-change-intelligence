@@ -30,10 +30,12 @@ def sek(hist: np.ndarray, index: np.ndarray | None = None) -> float:
     return float(metrics_from_histogram(pooled)["sek"])
 
 
-def diff(first: np.ndarray, second: np.ndarray, draws: np.ndarray) -> dict:
-    """SeK(first) − SeK(second) with a paired 95 % bootstrap interval and a one-sided p (≤ 0)."""
+def diff(first: np.ndarray, second: np.ndarray, draws: np.ndarray,
+         members: np.ndarray | None = None) -> dict:
+    """SeK(first) − SeK(second) on ``members`` (all tiles if None) with a paired 95 % bootstrap
+    interval over ``draws`` and a one-sided p (≤ 0)."""
     values = np.array([sek(first, idx) - sek(second, idx) for idx in draws])
-    return {"diff": sek(first) - sek(second),
+    return {"diff": sek(first, members) - sek(second, members),
             "ci95": [float(np.percentile(values, 2.5)), float(np.percentile(values, 97.5))],
             "p_not_better": float(np.mean(values <= 0))}
 
@@ -78,8 +80,8 @@ def main() -> None:
             members = np.flatnonzero(strata == stratum)
             sub = members[rng.integers(0, members.size, (args.resamples, members.size))]
             by_density.append({"tiles": int(members.size),
-                               "B − A two-stage": diff(two_b, two_a, sub),
-                               "B two-stage − A single": diff(two_b, single_a, sub)})
+                               "B − A two-stage": diff(two_b, two_a, sub, members),
+                               "B two-stage − A single": diff(two_b, single_a, sub, members)})
         result["models"][model] = {"sek": table, "comparisons": comparisons,
                                    "by_density": by_density}
         print(model, json.dumps({k: round(v["diff"], 4) for k, v in comparisons.items()}),
