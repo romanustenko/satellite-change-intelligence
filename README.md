@@ -72,6 +72,7 @@ its whole reason to exist.
 | Nov 10 – Nov 13 | Research 2 design v2; detector screening on SECOND; pilot for the training budget | BIT (Medium) chosen; budget 3.2·10¹⁷ training FLOPs per run |
 | Nov 16 – Nov 21 | HPO and final training of three SCD models (3 seeds), ROI policies on validation, protocol freeze | 12 frozen systems |
 | Nov 21 – Nov 23 | Single read of the test split; analysis; latency; web demo; cost checks on larger scenes | results below |
+| Nov 23 – Nov 24 | Ablation H6: semantic models retrained on crops (validation, exploratory) | crop training does not help |
 
 The full story of both studies — hypotheses, key decisions and mistakes — is in
 **[REPORT.md](REPORT.md)** (Part I: Research 1, Part II: Research 2).
@@ -291,6 +292,37 @@ alt="ΔSeK per density stratum with 95% confidence intervals"></p>
 - A perfect detector would add about +0.02 SeK at slightly lower cost: the idea has headroom, but the
   real detector does not reach it.
 
+### Ablation: train the semantic model on crops (H6, exploratory)
+
+In the main study the two-stage systems reuse the single-stage checkpoint, trained on whole tiles.
+Would a semantic model trained on the crops it later sees do better? Each model was trained again
+from ImageNet initialization **only on context windows around ground-truth changes**, with the same
+budget (3.2 × 10¹⁷ FLOPs) and the same learning rate / weight decay. *Validation only (444 tiles),
+one seed (42), checkpoint also selected on validation.*
+
+| SCD model | Trained on | Input: whole tile | Input: detector ROI (case 2) | Input: ground-truth ROI |
+|---|---|---:|---:|---:|
+| Siamese U-Net | tiles (main study) | **0.1733** | 0.1715 | 0.1843 |
+| | crops | 0.1694 | 0.1691 | 0.1837 |
+| SCanNet | tiles (main study) | **0.2247** | 0.2154 | 0.2410 |
+| | crops | 0.2182 | 0.2109 | 0.2398 |
+| MambaSCD | tiles (main study) | **0.2152** | 0.2049 | 0.2283 |
+| | crops | 0.2124 | 0.2046 | 0.2286 |
+
+| ΔSeK (95 % CI) | Siamese U-Net | SCanNet | MambaSCD |
+|---|---|---|---|
+| Two-stage: crop-trained − tile-trained | −0.0023 (−0.0096…+0.0052) | −0.0044 (−0.0128…+0.0034) | −0.0002 (−0.0085…+0.0081) |
+| Crop-trained two-stage − single-stage | −0.0042 (−0.0122…+0.0039) | *−0.0137* (−0.0231…−0.0051) | *−0.0106* (−0.0205…−0.0003) |
+
+- **Training on crops does not help** (H6 holds): the difference is ≈ 0 or negative for all three
+  models (upper CI bounds +0.003…+0.008). It does not help with perfect ROIs either.
+- With crop training the two-stage system falls **further behind** the single-stage one; for none
+  of the models is it non-inferior (lower CI bound below −δ = −0.007).
+- No change-density stratum shows a significant difference. Crops tend to help slightly on sparse
+  tiles (SCanNet, MambaSCD +0.006/+0.008, n.s.) and hurt on dense tiles (SCanNet −0.013).
+- Reading: what the two-stage system loses comes from the detector (missed changes), not from a
+  train/test mismatch of the semantic model; crops also take away the scene context.
+
 ### When does the two-stage system pay off?
 
 After the main study I checked the compute side on larger real scenes (validation data only, compute
@@ -393,7 +425,9 @@ During this project, I learned:
   SECOND has no geographic metadata, so spatial dependence between tiles is not modelled.
 - ROI policies and δ were chosen on the same validation tiles used to select checkpoints, which is
   optimistic for the two-stage systems.
-- The SCD models were trained on whole tiles and only *applied* to ROI windows.
+- The SCD models were trained on whole tiles and only *applied* to ROI windows. The crop-trained
+  variant (H6) is exploratory: validation only, one seed, ground-truth crops (no false or
+  truncated detector crops in training).
 - Our absolute SeK is below published numbers: the training budget is smaller and one shared recipe
   was used for all models.
 - The cost check on larger scenes measures compute only; accuracy at very low change shares is

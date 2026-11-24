@@ -276,6 +276,23 @@ into train 2 524 / validation 444 by filename groups (frozen manifest); the offi
 | H3 | LEVIR-CD pre-training of the detector helps (case 2 > case 3) | **not shown** (≤ +0.001 SeK, Holm p ≥ 0.19) |
 | H4 | The OR-ensemble detector helps (case 4 > case 2) | **not shown** (Holm p ≥ 0.23) |
 | H5 | The two-stage effect depends on the share of changed pixels | **yes:** U-Net gains only on sparse tiles; strong models lose least on dense tiles |
+| H6 | Training the semantic model on ROI crops instead of whole tiles does **not** improve the two-stage SeK (exploratory, my prediction: "crops ≈ tiles or worse") | **holds** (validation, 1 seed): crop − tile two-stage ΔSeK −0.0023 / −0.0044 / −0.0002 (U-Net / SCanNet / MambaSCD), all CIs include 0; with crops two-stage is not non-inferior to single-stage for any model |
+
+**H6 in detail (ablation B).** Each semantic model was trained again from ImageNet initialization
+only on context windows (128–512 px) around the ground-truth changes, with the same budget
+(3.2 × 10¹⁷ FLOPs) and the HPO-winning lr / weight decay; seed 42, validation only, checkpoint
+selected on validation. Validation SeK (tile-trained → crop-trained):
+
+| SCD model | Whole tile | Detector ROI (case 2) | Ground-truth ROI | Crop two-stage − single (95 % CI) |
+|---|---|---|---|---|
+| Siamese U-Net | 0.1733 → 0.1694 | 0.1715 → 0.1691 | 0.1843 → 0.1837 | −0.0042 (−0.0122…+0.0039) |
+| SCanNet | 0.2247 → 0.2182 | 0.2154 → 0.2109 | 0.2410 → 0.2398 | −0.0137 (−0.0231…−0.0051) |
+| MambaSCD | 0.2152 → 0.2124 | 0.2049 → 0.2046 | 0.2283 → 0.2286 | −0.0106 (−0.0205…−0.0003) |
+
+Crop training changes nothing even with perfect ROIs, so the two-stage loss comes from the detector
+(missed changes), not from a train/test mismatch of the semantic model. No density stratum shows a
+significant difference (crops tend to help slightly on sparse tiles and hurt on dense ones). The
+result matches the prediction I recorded before the runs.
 
 ## 2.6 Results
 
@@ -372,7 +389,7 @@ Binned by changed share, the SECOND and LEVIR-CD curves agree. Conclusions:
 | Measure training compute in FLOPs and stop by step count | GPU-hours on a shared server depend on other people's jobs (§2.3) | project-wide GPU-hour cap (used in v1) |
 | Train all three semantic models ourselves | published checkpoints had seen our validation split; MambaSCD's was selected on the test split | compare against published weights |
 | Reimplement SCanNet from the paper | its code has no licence | copy the authors' code |
-| Use the *same* semantic checkpoint inside the two-stage systems | isolates the effect of detector + cropping | train a separate crop model |
+| Use the *same* semantic checkpoint inside the two-stage systems | isolates the effect of detector + cropping | train a separate crop model (checked afterwards as H6: no gain) |
 | Choose the detector by a frozen screening rule on validation | avoid picking the detector that happens to look best later | choose by test or by intuition |
 | Context windows of fixed sizes (128/256/384/512) | windows of equal size can be batched on the GPU (lesson of H10–H11) | exact box crops (one forward pass per box, used in v1) |
 | Non-inferiority margin δ and density strata fixed by a mechanical rule before the test | no room to tune the conclusion | choose δ after seeing results |
@@ -416,7 +433,9 @@ What I learned from both studies is summarised in the [README](README.md#what-i-
   so spatial dependence between tiles is not modelled.
 - ROI policies, ensemble partner and δ were chosen on the same validation tiles used to select
   checkpoints (optimistic for the two-stage systems).
-- The semantic models were trained on whole tiles and only applied to ROI windows.
+- The semantic models of the main study were trained on whole tiles and only applied to ROI windows.
+  The crop-trained variant (H6) is exploratory: validation only (also used for checkpoint selection),
+  one seed, ground-truth crops only (no false or truncated detector crops in training).
 - Our absolute SeK is below published numbers: smaller training budget and a shared recipe.
 - §2.7 measures compute only; accuracy on large, sparse scenes is untested.
 
