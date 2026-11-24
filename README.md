@@ -209,6 +209,19 @@ To compare the systems fairly, I followed five rules:
 The implementation is in [`src/scripts/eval_r2_v2_systems.py`](src/scripts/eval_r2_v2_systems.py)
 and [`src/scripts/analyze_r2_v2_systems.py`](src/scripts/analyze_r2_v2_systems.py).
 
+### Hypotheses H1–H6
+
+H1–H5 were frozen before the test read; H6 was added as an exploratory ablation (validation only).
+
+| | Hypothesis | Outcome |
+|---|---|---|
+| H1 | At equal training FLOPs the three single-stage models differ | **yes:** SCanNet 0.238 ≳ MambaSCD 0.233 ≫ U-Net 0.185 SeK |
+| H2 | Two-stage is non-inferior in SeK (central question) | **yes** for all three, but more expensive, so never *preferable* |
+| H3 | LEVIR-CD pre-training of the detector helps (case 2 > case 3) | **not shown** (≤ +0.001 SeK) |
+| H4 | The OR-ensemble detector helps (case 4 > case 2) | **not shown** |
+| H5 | The two-stage effect depends on the share of changed pixels | **yes:** U-Net gains only on sparse tiles |
+| H6 | Training the SCD model on crops instead of whole tiles does **not** improve the two-stage SeK | **holds:** ΔSeK −0.0023 / −0.0044 / −0.0002, CIs include 0 ([ablation](#ablation-train-the-semantic-model-on-crops-h6-exploratory)) |
+
 ### Metrics
 
 | Value | Type | Meaning |
@@ -322,6 +335,8 @@ one seed (42), checkpoint also selected on validation.*
   tiles (SCanNet, MambaSCD +0.006/+0.008, n.s.) and hurt on dense tiles (SCanNet −0.013).
 - Reading: what the two-stage system loses comes from the detector (missed changes), not from a
   train/test mismatch of the semantic model; crops also take away the scene context.
+- Raw numbers (all comparisons, strata, training records):
+  [`results/research2/ablation_h6/`](results/research2/ablation_h6/).
 
 ### When does the two-stage system pay off?
 

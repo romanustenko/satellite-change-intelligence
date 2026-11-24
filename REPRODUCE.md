@@ -143,6 +143,24 @@ python src/scripts/latency_r2_v2_systems.py --device $D      # idle GPU; refuses
 python src/scripts/make_r2_v2_results.py                       # summary tables
 ```
 
+## 6. Ablation H6 (optional)
+
+Semantic models trained only on ground-truth crops (same budget and lr / weight decay; validation
+only, seed 42). Needs the ROI policies, the case-1 validation evaluation and `analysis_test.json`
+(frozen δ and density edges) from step 5. Results of this study: `results/research2/ablation_h6/`.
+
+```bash
+python src/scripts/run_r2_v2_ablation_b.py --model siam_unet_resnet18 --flop-budget 3.2e17 \
+  --lr 0.00094 --weight-decay 0.05 --seed 42 --device $D
+python src/scripts/run_r2_v2_ablation_b.py --model scannet --flop-budget 3.2e17 \
+  --lr 0.00025 --weight-decay 0.01 --seed 42 --device $D
+python src/scripts/run_r2_v2_ablation_b.py --model mamba_scd --flop-budget 3.2e17 \
+  --lr 0.00049 --weight-decay 0.05 --seed 42 --device $D
+R2_SCD_ROOT=artifacts/research2/v2/runs/ablation_b python src/scripts/eval_r2_v2_systems.py \
+  --split val --devices $D --seeds 42 --out artifacts/research2/v2/ablation_b/eval/val
+python src/scripts/analyze_r2_v2_ablation_b.py   # -> artifacts/research2/v2/ablation_b/analysis_val.json
+```
+
 ## Determinism
 
 Runs are seeded and use deterministic algorithms (a 10-step SCanNet run from a fresh clone of this

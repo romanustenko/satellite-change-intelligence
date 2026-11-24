@@ -292,7 +292,8 @@ selected on validation. Validation SeK (tile-trained → crop-trained):
 Crop training changes nothing even with perfect ROIs, so the two-stage loss comes from the detector
 (missed changes), not from a train/test mismatch of the semantic model. No density stratum shows a
 significant difference (crops tend to help slightly on sparse tiles and hurt on dense ones). The
-result matches the prediction I recorded before the runs.
+result matches the prediction I recorded before the runs. Raw numbers:
+[`results/research2/ablation_h6/`](results/research2/ablation_h6/).
 
 ## 2.6 Results
 
