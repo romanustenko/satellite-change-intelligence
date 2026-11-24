@@ -429,6 +429,8 @@ What I learned from both studies is summarised in the [README](README.md#what-i-
 
 ## 2.12 Reproducibility
 
+- Exact commands for every step (environment, weights, detectors, HPO, final runs, freeze, test
+  read): [REPRODUCE.md](REPRODUCE.md).
 - Every run records git revision, PyTorch/CUDA versions, GPU model, steps and FLOPs.
 - Frozen protocol and code are hashed in a freeze manifest; the single test read is recorded.
 - MambaSCD's `selective_scan` backward pass is not bitwise deterministic; its runs rely on seeds.

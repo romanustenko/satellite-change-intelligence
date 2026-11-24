@@ -431,11 +431,13 @@ pip install -e .
 Notes:
 - Python 3.11 and PyTorch with CUDA. MambaSCD also needs the `selective_scan` CUDA kernel from
   ChangeMamba.
-- Download SECOND and LEVIR-CD yourself. The frozen SECOND split is
-  `data/SECOND/second_split_manifest.json`.
-- Research 2 pipeline (each script documents its arguments): `run_r2_v2_hpo.py` →
-  `run_r2_v2_scd.py` → `run_r2_v2_detector.py` → `prepare_r2_v2_val.py` → `freeze_r2_v2.py` →
-  `eval_r2_v2_systems.py` → `analyze_r2_v2_systems.py` → `make_r2_v2_results.py`.
+- Research 1 detectors were trained in `notebooks/research_1/` (01–04, `heavy_*`); their final
+  weights are in `artifacts/final_models/` (Git LFS: `git lfs pull`).
+- Research 2 is script-driven: models in `src/satchange/models/`, training and HPO in
+  `src/scripts/run_r2_v2_*.py`, evaluation in `eval_r2_v2_systems.py` / `analyze_r2_v2_systems.py`.
+  **[REPRODUCE.md](REPRODUCE.md)** lists every step with the exact commands, budgets and
+  hyperparameters: kernel build, data layout, pretrained weights (URLs + SHA-256), detectors, HPO,
+  final runs, freeze and the single test read.
 - Figures of this README: `python src/scripts/make_readme_figures.py --demo <web-demo>/public`.
 
 ---

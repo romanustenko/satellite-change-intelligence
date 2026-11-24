@@ -221,5 +221,7 @@ for t in [
     "Reimplementation fidelity of SCanNet and MambaSCD against the published code was checked only on the reference checkpoints (V4-T05); absolute SeK is far below published numbers because our training budget and recipe are far smaller.",
 ]:
     w(f"- {t}")
-Path(ROOT / "docs/research2/RESULTS_V2.md").write_text("\n".join(L) + "\n")
+results_path = ROOT / "docs/research2/RESULTS_V2.md"
+results_path.parent.mkdir(parents=True, exist_ok=True)
+results_path.write_text("\n".join(L) + "\n")
 print("written", len(L), "lines")

@@ -59,8 +59,12 @@ def make_maps(args: argparse.Namespace) -> None:
     # consistency with the saved screening maps (Case 2 and Light Full were produced earlier)
     for variant, source in (("medium_ft", "medium_full"), ("light_full", "light_full")):
         for seed in lib.SEEDS:
-            old = np.load(lib.ROOT / f"artifacts/research2/v2/screening/{source}_s{seed}"
-                          "/probabilities_fp16.npy", mmap_mode="r")
+            screening = (lib.ROOT / f"artifacts/research2/v2/screening/{source}_s{seed}"
+                         "/probabilities_fp16.npy")
+            if not screening.is_file():
+                print(f"{variant} s{seed}: no screening map, consistency check skipped", flush=True)
+                continue
+            old = np.load(screening, mmap_mode="r")
             new = np.load(lib.map_path(VAL, variant, seed), mmap_mode="r")
             difference = float(np.abs(old.astype(np.float32) - new.astype(np.float32)).max())
             print(f"{variant} s{seed}: max |new - screening| = {difference:.5f}", flush=True)
