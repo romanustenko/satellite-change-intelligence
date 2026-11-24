@@ -2,3 +2,6 @@
 *.pth filter=lfs diff=lfs merge=lfs -text
 *.ckpt filter=lfs diff=lfs merge=lfs -text
 *.onnx filter=lfs diff=lfs merge=lfs -text
+
+# Language statistics: notebooks are analysis/documentation, the code base is Python.
+*.ipynb linguist-documentation
