@@ -392,7 +392,7 @@ more time than the saved area: the two-stage system was 1.8–2.5× slower.
 The demo shows 15 SECOND validation examples with precomputed predictions of all systems:
 - **simple view** — before/after images and the result in plain language;
 - **expert view** — class maps, error maps, change probability, class confidence, detector
-  probability with ROI windows, and all result tables.
+  probability with ROI windows, all result tables and the H6 ablation (crop-trained models).
 
 Available in English, German and Russian. The page contains only precomputed maps, no model
 weights.
