@@ -1,5 +1,11 @@
 # Satellite Change Intelligence
 
+<p align="center">
+  <a href="https://romanustenko.github.io/satellite-change/"><img src="https://img.shields.io/badge/Live_demo-Open-1d4e5c?style=for-the-badge" alt="Open the live demo"></a>
+  &nbsp;
+  <a href="REPORT.md"><img src="https://img.shields.io/badge/Full_report-Read-6d6a62?style=for-the-badge" alt="Read the full report"></a>
+</p>
+
 I started this project to understand how a neural network can find changes between two satellite
 images of the same place — first *where* something changed, and then *what* it changed into.
 
@@ -334,7 +340,7 @@ more time than the saved area: the two-stage system was 1.8–2.5× slower.
 
 ## Interactive Demo
 
-**[Open the demo](https://romanustenko.github.io/projects/satellite-change/)**
+<p align="center"><a href="https://romanustenko.github.io/satellite-change/"><img src="https://img.shields.io/badge/Live_demo-Open-1d4e5c?style=for-the-badge" alt="Open the live demo"></a></p>
 
 The demo shows 15 SECOND validation examples with precomputed predictions of all systems:
 - **simple view** — before/after images and the result in plain language;
@@ -346,19 +352,19 @@ weights.
 
 **Simple view** — one example, a model tier and the approach to choose, the result in plain words:
 
-<p align="center"><img src="assets/readme/site_simple.jpg" width="820" alt="Simple view of the web demo"></p>
+<p align="center"><a href="https://romanustenko.github.io/satellite-change/"><img src="assets/readme/site_simple.jpg" width="820" alt="Simple view of the web demo"></a></p>
 
 **Expert view, error layer** — single-stage and two-stage side by side: correct, wrong class,
 missed and false-alarm pixels against the ground truth:
 
-<p align="center"><img src="assets/readme/site_expert_errors.jpg" width="820" alt="Expert view of the web demo with error maps"></p>
+<p align="center"><a href="https://romanustenko.github.io/satellite-change/"><img src="assets/readme/site_expert_errors.jpg" width="820" alt="Expert view of the web demo with error maps"></a></p>
 
 **Expert view, detector layer** — detector probability and the ROI windows the SCD model receives:
 
-<p align="center"><img src="assets/readme/site_expert_detector.jpg" width="820" alt="Expert view of the web demo with detector probability and ROI windows"></p>
+<p align="center"><a href="https://romanustenko.github.io/satellite-change/"><img src="assets/readme/site_expert_detector.jpg" width="820" alt="Expert view of the web demo with detector probability and ROI windows"></a></p>
 
-*Note: the "Processed" column of the demo shows the area of the ROI boxes; the context windows
-the SCD model actually processes are larger (on average ≈ 1.05 of the tile, see Error Analysis).*
+*The "Processed" values of the demo are the areas of the context windows the SCD model actually
+processes; they can exceed 100 % of the tile because windows overlap (see Error Analysis).*
 
 ## What I Learned
 

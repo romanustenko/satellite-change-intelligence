@@ -405,8 +405,8 @@ Binned by changed share, the SECOND and LEVIR-CD curves agree. Conclusions:
 9. **Latency on a shared GPU:** foreign load appeared during the measurement; ratios are paired per
    tile and robust, absolute milliseconds may be inflated.
 10. **Demo details matter:** an inverted colour legend in dark mode, maps blocking touch scrolling,
-    and a "processed area" column showing the box instead of the window area (documented in the
-    README, not yet changed on the page) — all found by testing the page as a user.
+    and a "processed area" column showing the box instead of the window area (now corrected) — all
+    found by testing the page as a user.
 
 What I learned from both studies is summarised in the [README](README.md#what-i-learned).
 
