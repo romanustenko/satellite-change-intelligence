@@ -424,6 +424,9 @@ During this project, I learned:
   hundreds of trials and decide what to try next;
 * why every decision needs a reason I can defend: why these models and not others, why this
   resolution, why this loss, why this ROI policy;
+* how to turn an idea into a testable hypothesis, check it with experiments and state the result as
+  neutrally and precisely as the data allow — and to say plainly when the data are not enough to
+  decide, instead of stretching the conclusion;
 * how to make a comparison fair: equal training compute measured in FLOPs, selection on validation
   only, a frozen protocol and a single read of the test split;
 * how to judge "as good as" correctly with non-inferiority tests, paired bootstrap confidence
