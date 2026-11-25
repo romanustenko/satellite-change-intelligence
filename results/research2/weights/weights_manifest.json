@@ -1,0 +1,203 @@
+{
+ "format": "satchange-weights-v1",
+ "files": [
+  {
+   "file": "detector_case2_bit_levircd_to_second_s123.pt",
+   "bytes": 17306731,
+   "sha256": "e306f7aa3c7e1c97db21e19af4ade12fbb4eeab058fd55d35ad612f787386e54",
+   "task": "binary",
+   "model_name": "bit",
+   "seed": 123,
+   "epoch": 29,
+   "source_run": "medium_full_s123",
+   "source_sha256": "83b3a22f273e5fdab0572b99671493d7420aec7bdd4455c83d113de24a0a6742"
+  },
+  {
+   "file": "detector_case2_bit_levircd_to_second_s42.pt",
+   "bytes": 17306490,
+   "sha256": "9a9dff3b369e44cec9550a1b8806cf05371d4a01ed90baef9c9638a75a4029e3",
+   "task": "binary",
+   "model_name": "bit",
+   "seed": 42,
+   "epoch": 28,
+   "source_run": "medium_full_s42",
+   "source_sha256": "1b6d2afd912e146fe4b818f066a6ab6a40db6e8a4972c417fdb50225a6f128d2"
+  },
+  {
+   "file": "detector_case2_bit_levircd_to_second_s777.pt",
+   "bytes": 17306731,
+   "sha256": "99ac9ebf56f8c7d550da805c1425dd7812bc80debc4b7eea297ecdc73cc40bc7",
+   "task": "binary",
+   "model_name": "bit",
+   "seed": 777,
+   "epoch": 30,
+   "source_run": "medium_full_s777",
+   "source_sha256": "c280e1b027ac249b787b1189f66da2586a5dc7e820fe47ab65ac39fa99e8282b"
+  },
+  {
+   "file": "detector_case3_bit_second_only_s123.pt",
+   "bytes": 17305285,
+   "sha256": "ed87621008c8452e8f56aa037da18a230453197901d73cdcf61054f16b23368d",
+   "task": "binary",
+   "model_name": "bit",
+   "seed": 123,
+   "epoch": 29,
+   "source_run": "medium_scratch_s123",
+   "source_sha256": "73e9aea66bdf1412921b5504766aff4e9fe96d22482ce1e85ba840ecc114558d"
+  },
+  {
+   "file": "detector_case3_bit_second_only_s42.pt",
+   "bytes": 17305044,
+   "sha256": "f042de5a118b2b64b6f194d316428ae3b0e36532326bde8c87bc7c87568ab347",
+   "task": "binary",
+   "model_name": "bit",
+   "seed": 42,
+   "epoch": 30,
+   "source_run": "medium_scratch_s42",
+   "source_sha256": "4fd474e14490a9f604970b1b5763432a2fe64aa41177bda3242746e00df45204"
+  },
+  {
+   "file": "detector_case3_bit_second_only_s777.pt",
+   "bytes": 17305285,
+   "sha256": "f0a0291a6c0a7cc6c6d26efb138bf318af6bdae895e619573ff70484e0bf9c78",
+   "task": "binary",
+   "model_name": "bit",
+   "seed": 777,
+   "epoch": 27,
+   "source_run": "medium_scratch_s777",
+   "source_sha256": "f874bf0f536f5f26ed90c40725d0d5ef42bbbd60745e0378305a43438f8ec238"
+  },
+  {
+   "file": "detector_case4_fc_siam_diff_resized_s123.pt",
+   "bytes": 7781261,
+   "sha256": "39e5df988427dd52da931600136b392d464fa94b444e2ab7abfe26561c1334e3",
+   "task": "binary",
+   "model_name": "fc_siam_diff",
+   "seed": 123,
+   "epoch": 218,
+   "source_run": "light_resized_s123",
+   "source_sha256": "2ba492013690caade15c7239f46269500e56946041c9fe6e487bac7cd40a238e"
+  },
+  {
+   "file": "detector_case4_fc_siam_diff_resized_s42.pt",
+   "bytes": 7781209,
+   "sha256": "e661bb2d32f71cf4dbe08dfdc413bd953463acb0739cffbcaf783e399e31143a",
+   "task": "binary",
+   "model_name": "fc_siam_diff",
+   "seed": 42,
+   "epoch": 290,
+   "source_run": "light_resized_s42",
+   "source_sha256": "06e00d964b13d475981d53b9de6c0ee644204153fdbd1fa82fc549c617d2625e"
+  },
+  {
+   "file": "detector_case4_fc_siam_diff_resized_s777.pt",
+   "bytes": 7781261,
+   "sha256": "2cc91ffdc64bfcb60a2916176db75ea26388a70de6265279d6d8f1a6706e7913",
+   "task": "binary",
+   "model_name": "fc_siam_diff",
+   "seed": 777,
+   "epoch": 259,
+   "source_run": "light_resized_s777",
+   "source_sha256": "a9dd103b6cce8d3ca242428331b93081cb5b959c1a9a903c29c8f2623c0b402c"
+  },
+  {
+   "file": "scd_mamba_scd_s123.pt",
+   "bytes": 148799283,
+   "sha256": "4998c841ef3b0686f3bb79439c63aa7ff0bdf9231dcbe80a3d417d002e44f792",
+   "task": "semantic",
+   "model_name": "mamba_scd",
+   "seed": 123,
+   "epoch": 39,
+   "source_run": "mamba_final_s123",
+   "source_sha256": "e242e135f202a9b0916cd9e43335531d9a02af8331bdd7807a1ba72f902510de"
+  },
+  {
+   "file": "scd_mamba_scd_s42.pt",
+   "bytes": 148798475,
+   "sha256": "3a9bc7efda2666ba17624b0155a0e88c968e11d491c2ef3c2e39715396ce8981",
+   "task": "semantic",
+   "model_name": "mamba_scd",
+   "seed": 42,
+   "epoch": 41,
+   "source_run": "mamba_final_s42",
+   "source_sha256": "02265da50c9839c8b349f6c20fe9cd97f4c8a1054352e926b5a7509d700dbdef"
+  },
+  {
+   "file": "scd_mamba_scd_s777.pt",
+   "bytes": 148799283,
+   "sha256": "7c14dae604114cdbdb956fc3c21c47e77478243fca5dfd2a85df03ca520ff07d",
+   "task": "semantic",
+   "model_name": "mamba_scd",
+   "seed": 777,
+   "epoch": 54,
+   "source_run": "mamba_final_s777",
+   "source_sha256": "97973a341b8ca54da6e39a762573ad14f40c1c2e02b978a6c5f4be92a3452a56"
+  },
+  {
+   "file": "scd_scannet_s123.pt",
+   "bytes": 111801012,
+   "sha256": "6307663d76f822a5a2f607b8076e5984cfd4e31397ba3097247372c585201098",
+   "task": "semantic",
+   "model_name": "scannet",
+   "seed": 123,
+   "epoch": 28,
+   "source_run": "scannet_final_s123",
+   "source_sha256": "aba76565c755f3e5101222d3007a2d0261617f53936cd5fcdf9cf3cec89974fa"
+  },
+  {
+   "file": "scd_scannet_s42.pt",
+   "bytes": 111800613,
+   "sha256": "a01e082db85bb7e4aebb62c9a7e807992a22e4d4de4f2ae46a1bba56497a1329",
+   "task": "semantic",
+   "model_name": "scannet",
+   "seed": 42,
+   "epoch": 30,
+   "source_run": "scannet_final_s42",
+   "source_sha256": "d9b3f631226927f1df3262e935aea08cb2937943d801198824d85194c8504f41"
+  },
+  {
+   "file": "scd_scannet_s777.pt",
+   "bytes": 111801012,
+   "sha256": "4da3ec0d00c6d71158a0c0a2a02f390393dabda12feebcbead3d132d6e0a2112",
+   "task": "semantic",
+   "model_name": "scannet",
+   "seed": 777,
+   "epoch": 34,
+   "source_run": "scannet_final_s777",
+   "source_sha256": "72c23bd2d689105e88bccc9b0a129ad7067bfbc5a871a9bbb020d20a1273cabe"
+  },
+  {
+   "file": "scd_siam_unet_resnet18_s123.pt",
+   "bytes": 77942943,
+   "sha256": "e5987fa4b4040edef84a524541fb8d7b696b28e9d2c8aada17bb420b48735c7c",
+   "task": "semantic",
+   "model_name": "siam_unet_resnet18",
+   "seed": 123,
+   "epoch": 60,
+   "source_run": "unet_final_s123",
+   "source_sha256": "fda2726b5932d111bab56fcedda02917c1d5820cc5c8238b326c6661dcb720fc"
+  },
+  {
+   "file": "scd_siam_unet_resnet18_s42.pt",
+   "bytes": 77942693,
+   "sha256": "9b140454f93e3586ac7bffc8bf1f2e21b7f0915ddc573dee9f83b88e09afe29d",
+   "task": "semantic",
+   "model_name": "siam_unet_resnet18",
+   "seed": 42,
+   "epoch": 57,
+   "source_run": "unet_final_s42",
+   "source_sha256": "70ef873f37ac5d8e3f57d53de92dd064f9c8a2438a6e9304144e229cbea88fa6"
+  },
+  {
+   "file": "scd_siam_unet_resnet18_s777.pt",
+   "bytes": 77942943,
+   "sha256": "58a554a5554354d1448c05213480b4cf0b8f4dec3cc013dff289d168a41e9f78",
+   "task": "semantic",
+   "model_name": "siam_unet_resnet18",
+   "seed": 777,
+   "epoch": 74,
+   "source_run": "unet_final_s777",
+   "source_sha256": "7fbc0da438adb3ac713bcba78ed6cef14041fff4c961557fd15ccdb10148fd58"
+  }
+ ]
+}

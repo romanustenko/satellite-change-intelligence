@@ -143,6 +143,60 @@ python src/scripts/latency_r2_v2_systems.py --device $D      # idle GPU; refuses
 python src/scripts/make_r2_v2_results.py                       # summary tables
 ```
 
+## Trained weights (release v1.1)
+
+The weights of all 18 frozen Research 2 networks — three SCD models × three seeds and the three
+detector variants × three seeds — are attached to the GitHub release
+[v1.1](https://github.com/romanustenko/satellite-change-intelligence/releases/tag/v1.1) (1.14 GB in
+total). Each file holds only the tensors the evaluation loads (best validation epoch), the model
+name and its constructor parameters; optimizer and RNG state are dropped. Every tensor was checked
+bitwise against the frozen `best.pt` listed in the freeze manifest. Written by
+`src/scripts/export_r2_v2_weights.py`; the list with seeds, epochs and source hashes is in
+[`results/research2/weights/weights_manifest.json`](results/research2/weights/weights_manifest.json).
+
+```python
+import torch
+from satchange.models.factory import BINARY_TASK, SEMANTIC_TASK, create_task_model
+
+payload = torch.load("scd_scannet_s42.pt", map_location="cpu", weights_only=True)
+task = SEMANTIC_TASK if payload["task"] == "semantic" else BINARY_TASK
+model = create_task_model(payload["model_name"], payload["model_parameters"], task)
+model.load_state_dict(payload["state_dict"], strict=True)
+model.eval()  # forward(before, after) on float32 RGB tensors [B, 3, H, W]
+```
+
+Inputs: SCD models were trained on RGB in [0, 1] normalized with the ImageNet mean/std
+(`input_normalization="imagenet"`, `src/satchange/data/normalization.py`); detectors take RGB in
+[0, 1] without normalization (the Light Resized detector at 256 × 256, the others at 512 × 512).
+
+The evaluation scripts above read the full training checkpoints (`best.pt` with training state), so
+they cannot consume these files directly; the files are for inference and for checking the reported
+numbers with your own evaluation loop. Detector roles: `case2` = BIT pre-trained on LEVIR-CD and
+fine-tuned on SECOND, `case3` = BIT trained on SECOND only, `case4` = FC-Siam-Diff Resized (the OR
+partner of the case-2 detector).
+
+| File | MB | SHA-256 |
+|---|---:|---|
+| `detector_case2_bit_levircd_to_second_s123.pt` | 17.3 | `e306f7aa3c7e1c97db21e19af4ade12fbb4eeab058fd55d35ad612f787386e54` |
+| `detector_case2_bit_levircd_to_second_s42.pt` | 17.3 | `9a9dff3b369e44cec9550a1b8806cf05371d4a01ed90baef9c9638a75a4029e3` |
+| `detector_case2_bit_levircd_to_second_s777.pt` | 17.3 | `99ac9ebf56f8c7d550da805c1425dd7812bc80debc4b7eea297ecdc73cc40bc7` |
+| `detector_case3_bit_second_only_s123.pt` | 17.3 | `ed87621008c8452e8f56aa037da18a230453197901d73cdcf61054f16b23368d` |
+| `detector_case3_bit_second_only_s42.pt` | 17.3 | `f042de5a118b2b64b6f194d316428ae3b0e36532326bde8c87bc7c87568ab347` |
+| `detector_case3_bit_second_only_s777.pt` | 17.3 | `f0a0291a6c0a7cc6c6d26efb138bf318af6bdae895e619573ff70484e0bf9c78` |
+| `detector_case4_fc_siam_diff_resized_s123.pt` | 7.8 | `39e5df988427dd52da931600136b392d464fa94b444e2ab7abfe26561c1334e3` |
+| `detector_case4_fc_siam_diff_resized_s42.pt` | 7.8 | `e661bb2d32f71cf4dbe08dfdc413bd953463acb0739cffbcaf783e399e31143a` |
+| `detector_case4_fc_siam_diff_resized_s777.pt` | 7.8 | `2cc91ffdc64bfcb60a2916176db75ea26388a70de6265279d6d8f1a6706e7913` |
+| `scd_mamba_scd_s123.pt` | 148.8 | `4998c841ef3b0686f3bb79439c63aa7ff0bdf9231dcbe80a3d417d002e44f792` |
+| `scd_mamba_scd_s42.pt` | 148.8 | `3a9bc7efda2666ba17624b0155a0e88c968e11d491c2ef3c2e39715396ce8981` |
+| `scd_mamba_scd_s777.pt` | 148.8 | `7c14dae604114cdbdb956fc3c21c47e77478243fca5dfd2a85df03ca520ff07d` |
+| `scd_scannet_s123.pt` | 111.8 | `6307663d76f822a5a2f607b8076e5984cfd4e31397ba3097247372c585201098` |
+| `scd_scannet_s42.pt` | 111.8 | `a01e082db85bb7e4aebb62c9a7e807992a22e4d4de4f2ae46a1bba56497a1329` |
+| `scd_scannet_s777.pt` | 111.8 | `4da3ec0d00c6d71158a0c0a2a02f390393dabda12feebcbead3d132d6e0a2112` |
+| `scd_siam_unet_resnet18_s123.pt` | 77.9 | `e5987fa4b4040edef84a524541fb8d7b696b28e9d2c8aada17bb420b48735c7c` |
+| `scd_siam_unet_resnet18_s42.pt` | 77.9 | `9b140454f93e3586ac7bffc8bf1f2e21b7f0915ddc573dee9f83b88e09afe29d` |
+| `scd_siam_unet_resnet18_s777.pt` | 77.9 | `58a554a5554354d1448c05213480b4cf0b8f4dec3cc013dff289d168a41e9f78` |
+
+
 ## 6. Ablation H6 (optional)
 
 Semantic models trained only on ground-truth crops (same budget and lr / weight decay; validation

@@ -512,7 +512,10 @@ Datasets and third-party work:
 - BIT (Chen et al. 2021), FC-Siam-Diff (Daudt et al. 2018), SegFormer / MiT (Xie et al. 2021).
 
 Datasets and run outputs are not included in the repository. The six final Research 1 detectors
-are stored with Git LFS in `artifacts/final_models/`; the Research 2 SCD weights are not published.
+are stored with Git LFS in `artifacts/final_models/`; the weights of all frozen Research 2 networks
+(SCD models and detectors) are attached to the release
+[v1.1](https://github.com/romanustenko/satellite-change-intelligence/releases/tag/v1.1) (see
+[REPRODUCE.md](REPRODUCE.md#trained-weights-release-v11)).
 
 ## License
 
