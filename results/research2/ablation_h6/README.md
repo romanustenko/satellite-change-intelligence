@@ -27,6 +27,6 @@ Code: [`src/scripts/run_r2_v2_ablation_b.py`](../../../src/scripts/run_r2_v2_abl
 (analysis); commands in [REPRODUCE.md](../../../REPRODUCE.md#6-ablation-h6-optional).
 
 Note: `git_revision` in `training_runs.json` is a commit of the development branch, read when a run
-finishes (`2c750f5` = `6bb3f0b` on `main`). Training started at `37c6061` (= `145c30d` on `main`);
+finishes (`2c750f5` = `7fc10ab` on `main`). Training started at `37c6061` (= `5318473` on `main`);
 the commits in between changed only documentation, the Research 2 notebook and two evaluation
 scripts that training does not use.

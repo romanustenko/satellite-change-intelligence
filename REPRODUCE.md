@@ -167,3 +167,10 @@ Runs are seeded and use deterministic algorithms (a 10-step SCanNet run from a f
 repository reproduced the recorded validation SeK exactly on the same server). MambaSCD's
 `selective_scan` backward pass is not bitwise deterministic, so its reruns differ slightly. Other
 GPUs, drivers or PyTorch versions give small numeric differences.
+
+## Commit hashes in run records
+
+The repository history was rewritten on 2026-11-25 to remove local working notes; the code and
+results did not change. Commit hashes stored in run records written before that date (for example
+`git_revision` in `artifacts/final_models/*/metadata.json` or `configs/SCREENING_RULE.json`) refer
+to the history before the rewrite. Commits can be matched by their date and message.
